@@ -181,7 +181,7 @@ func main() {
 		signal.Notify(c, os.Interrupt, syscall.SIGTERM)
 		go func() {
 			<-c
-			os.Remove(interLinkEndpoint)
+			os.Remove(strings.ReplaceAll(interLinkEndpoint, "unix://", ""))
 			os.Exit(1)
 		}()
 		server := http.Server{

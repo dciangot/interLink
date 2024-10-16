@@ -107,7 +107,7 @@ In general, starting from the deployment of the remote components is adviced. Si
 
       ## If you want to remove the secure warning, you should enable HostKey check (more advanced manual setup) with -hostkey option
     
-      $HOME/.interlink/bin/ssh-tunnel -addr $CLUSTER_PUBLIC_IP:$SSH_TUNNEL_NODE_PORT -keyfile $PRIV_KEY_FILE -user interlink -rport 3000 -lsock plugin.sock  &> $HOME/.interlink/logs/ssh-tunnel.log &
+      $HOME/.interlink/bin/ssh-tunnel -addr $CLUSTER_PUBLIC_IP:$SSH_TUNNEL_NODE_PORT -keyfile $PRIV_KEY_FILE -user interlink -rport 3000 -lsock $HOME/.interlink/plugin.sock  &> $HOME/.interlink/logs/ssh-tunnel.log &
       echo $! > $HOME/.interlink/ssh-tunnel.pid     
       ```
 
@@ -145,7 +145,7 @@ In general, starting from the deployment of the remote components is adviced. Si
 
       ```bash title="$HOME/.interlink/config/plugin-config.yaml"
       ## Multi user host
-      # SidecarURL: "unix:///home/myusername/plugin.socket"
+      # SidecarURL: "unix:///home/myusername/plugin.sock"
       # InterlinkPort: "0"
       # SidecarPort: "0"
       
@@ -200,7 +200,7 @@ In general, starting from the deployment of the remote components is adviced. Si
 
       ```bash title="$HOME/.interlink/plugin-config.yaml"
       ## Multi user host
-      # Socket: "unix:///home/myusername/plugin.socket"
+      # Socket: "unix:///home/myusername/plugin.sock"
       # InterlinkPort: "0"
       # SidecarPort: "0"
       
@@ -270,7 +270,7 @@ In general, starting from the deployment of the remote components is adviced. Si
     - Create a configuration file: 
 
       ```bash title="$HOME/.interlink/config/plugin-config.yaml"
-      Socket: "unix:///home/myusername/plugin.socket"
+      Socket: "unix:///home/myusername/.interlink/plugin.sock"
       SidecarPort: "0"
       
       CommandPrefix: ""
@@ -317,7 +317,7 @@ In general, starting from the deployment of the remote components is adviced. Si
     - Create a configuration file: 
 
       ```bash title="$HOME/config/plugin-config.yaml"
-      Socket: "unix:///home/myusername/plugin.socket"
+      Socket: "unix:///home/myusername/.interlink/plugin.sock"
       SidecarPort: "0"
       
       CommandPrefix: ""

@@ -380,7 +380,7 @@ func (p *Provider) nodeUpdate(ctx context.Context) {
 		if err != nil || !ok {
 			p.node.Status.Conditions = NodeCondition(false)
 			p.onNodeChangeCallback(p.node)
-			log.G(ctx).Error("Ping Failed with exit code: ", code)
+			log.G(ctx).Error("Ping Failed with exit code: ", code, "\n error: ", err, "\n ok: ", ok)
 		} else {
 
 			p.node.Status.Conditions = NodeCondition(true)

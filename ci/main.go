@@ -8,12 +8,13 @@ package main
 import (
 	"bytes"
 	"context"
-	"dagger/interlink/internal/dagger"
 	"fmt"
 	"html/template"
 	"log"
 	"strings"
 	"time"
+
+	"dagger/interlink/internal/dagger"
 )
 
 var (
@@ -72,10 +73,12 @@ func New(name string,
 ) *Interlink {
 
 	return &Interlink{
-		Name:              name,
-		VirtualKubeletRef: VirtualKubeletRef,
-		InterlinkRef:      InterlinkRef,
-		PluginRef:         pluginRef,
+		Name:               name,
+		VirtualKubeletRef:  VirtualKubeletRef,
+		VKContainer:        dag.Container().From(VirtualKubeletRef),
+		InterlinkRef:       InterlinkRef,
+		InterlinkContainer: dag.Container().From(InterlinkRef),
+		PluginRef:          pluginRef,
 	}
 }
 

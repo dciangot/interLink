@@ -79,6 +79,7 @@ func retrieveData(ctx context.Context, config types.InterLinkConfig, pod types.P
 		log.G(ctx).Debug("-- Retrieving data for mountpoint " + mountVar.Name)
 
 		for _, vol := range pod.Pod.Spec.Volumes {
+			log.G(ctx).Debug("-- Retrieving volume name: " + vol.Name)
 			if vol.Name == mountVar.Name {
 				if vol.ConfigMap != nil {
 

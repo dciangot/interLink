@@ -101,6 +101,28 @@ type Opts struct {
 	ErrorsOnly bool
 }
 
+func createCertPool(ctx context.Context, interLinkConfig commonIL.Config) *x509.CertPool {
+	certPool, err := x509.SystemCertPool()
+	if err != nil {
+		log.G(ctx).Fatalf("Failed to parse system rootCAs for client: %v", err)
+	}
+
+	if interLinkConfig.HTTP.CaCert != "" {
+
+		certContent, err := os.ReadFile(interLinkConfig.HTTP.CaCert)
+		if err != nil {
+			log.G(ctx).Fatalf("Failed to read config-provided rootCAs for client: %v", err)
+		}
+
+		certFromConfig, err := x509.ParseCertificate(certContent)
+		if err != nil {
+			log.G(ctx).Fatalf("Failed to parse config-provided rootCAs for client: %v", err)
+		}
+		certPool.AddCert(certFromConfig)
+	}
+	return certPool
+}
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -229,24 +251,7 @@ func main() {
 		socketPath = strings.ReplaceAll(interLinkConfig.InterlinkURL, "unix://", "")
 	}
 
-	certPool, err := x509.SystemCertPool()
-	if err != nil {
-		log.G(ctx).Fatalf("Failed to parse system rootCAs for client: %v", err)
-	}
-
-	if interLinkConfig.HTTP.CaCert != "" {
-
-		certContent, err := os.ReadFile(interLinkConfig.HTTP.CaCert)
-		if err != nil {
-			log.G(ctx).Fatalf("Failed to read config-provided rootCAs for client: %v", err)
-		}
-
-		certFromConfig, err := x509.ParseCertificate(certContent)
-		if err != nil {
-			log.G(ctx).Fatalf("Failed to parse config-provided rootCAs for client: %v", err)
-		}
-		certPool.AddCert(certFromConfig)
-	}
+	certPool := createCertPool(ctx, interLinkConfig)
 
 	dialer := &net.Dialer{
 		Timeout:   90 * time.Second,

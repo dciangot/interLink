@@ -186,6 +186,10 @@ func createRequest(ctx context.Context, config Config, pod types.PodCreateReques
 	tracer := otel.Tracer("interlink-service")
 	interLinkEndpoint := getSidecarEndpoint(ctx, config.InterlinkURL, config.InterlinkPort)
 
+	if config.JobScriptBuilderURL != "" {
+		pod.JobScriptBuilderURL = config.JobScriptBuilderURL
+	}
+
 	bodyBytes, err := json.Marshal(pod)
 	if err != nil {
 		log.L.Error(err)
@@ -900,6 +904,7 @@ func handleContainersUpdate(ctx context.Context, podRemoteStatus types.PodStatus
 			case containerRemoteStatus.State.Running != nil:
 				podRunning = true
 				log.G(ctx).Debug("Pod " + podRemoteStatus.PodName + ": Service " + containerRemoteStatus.Name + " is running on Sidecar")
+				podRefInCluster.Status.Phase = v1.PodPhase(v1.PodReady)
 				podRefInCluster.Status.ContainerStatuses[index].Ready = true
 				podRefInCluster.Status.ContainerStatuses[index].State.Running = containerRemoteStatus.State.Running
 			}
@@ -1036,7 +1041,7 @@ func checkPodsStatus(ctx context.Context, p *Provider, pod *v1.Pod, token string
 				}
 				if podRunning && podRefInCluster.Status.Phase != v1.PodRunning { // do not update the status if it is already running
 					podRefInCluster.Status.Phase = v1.PodRunning
-					podRefInCluster.Status.Conditions = append(podRefInCluster.Status.Conditions, v1.PodCondition{Type: v1.PodReady, Status: v1.ConditionTrue})
+					podRefInCluster.Status.Conditions = []v1.PodCondition{{Type: v1.PodReady, Status: v1.ConditionTrue}}
 					podRefInCluster.Status.Reason = "Running"
 				}
 			}

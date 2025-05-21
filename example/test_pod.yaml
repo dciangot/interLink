@@ -9,7 +9,7 @@ spec:
   automountServiceAccountToken: false
   containers:
   - args:
-    - "\"600\"" 
+    - "600" 
     command:
     - sleep 
     image: "docker://ubuntu" 

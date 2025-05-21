@@ -929,6 +929,11 @@ func checkPodsStatus(ctx context.Context, p *Provider, pod *v1.Pod, token string
 			return nil, errWithContext
 		}
 
+		if len(ret) == 0 {
+			log.G(ctx).Warning("No status available from InterLink for pod ", pod.Name, "and Pod uid ", pod.UID)
+			return nil, nil
+		}
+
 		// if there is a pod status available go ahead to match with the latest state available in etcd
 		podRemoteStatus := ret[0]
 

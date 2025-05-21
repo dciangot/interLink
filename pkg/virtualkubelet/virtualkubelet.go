@@ -772,17 +772,21 @@ func (p *Provider) statusLoop(ctx context.Context) {
 
 		for _, pod := range p.pods {
 			if pod.Status.Phase != "Initializing" {
-				go func() {
-					if pod.Status.Phase == v1.PodFailed || pod.Status.Phase == v1.PodSucceeded {
-						if p.pods[string(pod.UID)].Status.Phase != pod.Status.Phase {
-							_, err := checkPodsStatus(ctx, p, pod, token, p.config)
-							if err != nil {
-								log.G(ctx).Error(err)
-							}
-							p.asyncUpdate(ctx, pod)
+				if pod.Status.Phase == v1.PodFailed || pod.Status.Phase == v1.PodSucceeded {
+					if p.pods[string(pod.UID)].Status.Phase != pod.Status.Phase {
+						_, err := checkPodsStatus(ctx, p, pod, token, p.config)
+						if err != nil {
+							log.G(ctx).Error(err)
 						}
+						p.asyncUpdate(ctx, pod)
 					}
-				}()
+				} else {
+					_, err := checkPodsStatus(ctx, p, pod, token, p.config)
+					if err != nil {
+						log.G(ctx).Error(err)
+					}
+					p.asyncUpdate(ctx, pod)
+				}
 			}
 		}
 

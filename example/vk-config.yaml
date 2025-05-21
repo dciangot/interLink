@@ -1,4 +1,4 @@
-InterlinkURL: "http://192.168.5.2"
+InterlinkURL: "http://localhost"
 InterlinkPort: "3000" 
 VerboseLogging: true
 ErrorsOnlyLogging: false

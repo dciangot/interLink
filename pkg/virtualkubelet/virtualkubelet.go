@@ -770,35 +770,20 @@ func (p *Provider) statusLoop(ctx context.Context) {
 			token = string(b)
 		}
 
-		var podsList []*v1.Pod
 		for _, pod := range p.pods {
 			if pod.Status.Phase != "Initializing" {
-				podsList = append(podsList, pod)
-				// err := p.UpdatePod(ctx, pod)
-				// if err != nil {
-				// 	log.G(ctx).Error(err)
-				// }
-			}
-		}
-
-		if len(podsList) > 0 {
-			_, err := checkPodsStatus(ctx, p, podsList, token, p.config)
-			if err != nil {
-				log.G(ctx).Error(err)
-			}
-			for _, pod := range p.pods {
-				if pod.Status.Phase == v1.PodFailed || pod.Status.Phase == v1.PodSucceeded {
-					if p.pods[string(pod.UID)].Status.Phase != pod.Status.Phase {
-						p.pods[string(pod.UID)] = pod
-						go p.asyncUpdate(ctx, pod)
+				go func() {
+					if pod.Status.Phase == v1.PodFailed || pod.Status.Phase == v1.PodSucceeded {
+						if p.pods[string(pod.UID)].Status.Phase != pod.Status.Phase {
+							_, err := checkPodsStatus(ctx, p, pod, token, p.config)
+							if err != nil {
+								log.G(ctx).Error(err)
+							}
+							p.asyncUpdate(ctx, pod)
+						}
 					}
-				} else {
-					p.pods[string(pod.UID)] = pod
-					go p.asyncUpdate(ctx, pod)
-				}
+				}()
 			}
-		} else {
-			log.G(ctx).Info("No pods to monitor, waiting for the next loop to start")
 		}
 
 		log.G(ctx).Info("statusLoop=end")

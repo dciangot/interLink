@@ -1,0 +1,17 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+# Set to true to enable test mode with dummy authentication (no OIDC required)
+test_mode: false
+
+oidc:
+  client_id: "your-oidc-client-id"
+  client_secret: "your-oidc-client-secret"
+  redirect_url: "http://localhost:8080/auth/callback"
+  issuer: "https://your-oidc-provider.com"
+  scopes:
+    - "openid"
+    - "profile"
+    - "email"
+    - "offline_access"

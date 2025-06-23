@@ -1,4 +1,4 @@
-all: interlink vk installer ssh-tunnel
+all: interlink vk installer ssh-tunnel webui
 
 interlink:
 	CGO_ENABLED=0 OOS=linux go build -o bin/interlink cmd/interlink/main.go cmd/interlink/cri.go
@@ -11,6 +11,9 @@ installer:
 
 ssh-tunnel:
 	CGO_ENABLED=0 OOS=linux go build -o bin/ssh-tunnel cmd/ssh-tunnel/main.go
+
+webui:
+	CGO_ENABLED=0 OOS=linux go build -o bin/webui cmd/webui/main.go
 
 openapi:
 	go run cmd/openapi-gen/main.go

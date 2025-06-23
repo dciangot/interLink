@@ -290,15 +290,18 @@ func main() {
 		log.Fatalf("Failed to initialize templates: %v", err)
 	}
 
-	oauth2Config = &oauth2.Config{
-		ClientID:     config.OIDC.ClientID,
-		ClientSecret: config.OIDC.ClientSecret,
-		RedirectURL:  config.OIDC.RedirectURL,
-		Scopes:       config.OIDC.Scopes,
-		Endpoint: oauth2.Endpoint{
-			AuthURL:  config.OIDC.Issuer + "/auth",
-			TokenURL: config.OIDC.Issuer + "/token",
-		},
+	// Only initialize OAuth2 config if not in test mode
+	if !config.TestMode {
+		oauth2Config = &oauth2.Config{
+			ClientID:     config.OIDC.ClientID,
+			ClientSecret: config.OIDC.ClientSecret,
+			RedirectURL:  config.OIDC.RedirectURL,
+			Scopes:       config.OIDC.Scopes,
+			Endpoint: oauth2.Endpoint{
+				AuthURL:  config.OIDC.Issuer + "/auth",
+				TokenURL: config.OIDC.Issuer + "/token",
+			},
+		}
 	}
 
 	r := mux.NewRouter()
@@ -312,12 +315,15 @@ func main() {
 	r.HandleFunc("/auth/callback", callbackHandler).Methods("GET")
 	r.HandleFunc("/auth/logout", logoutHandler).Methods("GET")
 	r.HandleFunc("/configure", configureHandler).Methods("GET", "POST")
-	r.HandleFunc("/generate/helm", generateHelmHandler).Methods("POST")
-	r.HandleFunc("/generate/script", generateScriptHandler).Methods("POST")
+	r.HandleFunc("/generate/helm", generateHelmHandler).Methods("GET")
+	r.HandleFunc("/generate/script", generateScriptHandler).Methods("GET")
+	r.HandleFunc("/view/helm", viewHelmHandler).Methods("GET")
+	r.HandleFunc("/view/script", viewScriptHandler).Methods("GET")
 
 	// Test mode routes
 	if config.TestMode {
 		r.HandleFunc("/auth/test-login", testLoginHandler).Methods("GET")
+		r.HandleFunc("/test-cookie", testCookieHandler).Methods("GET")
 	}
 
 	addr := fmt.Sprintf("%s:%d", config.Server.Host, config.Server.Port)
@@ -335,13 +341,25 @@ func main() {
 }
 
 func homeHandler(w http.ResponseWriter, r *http.Request) {
+	log.Printf("Home handler: All cookies: %v", r.Cookies())
 	sessionID, err := r.Cookie("session_id")
-	if err != nil || sessions[sessionID.Value] == nil {
+	if err != nil {
+		log.Printf("No session cookie found: %v", err)
 		renderTemplate(w, "login", map[string]interface{}{
 			"TestMode": config.TestMode,
 		})
 		return
 	}
+
+	if sessions[sessionID.Value] == nil {
+		log.Printf("Session not found for ID: %s, available sessions: %d", sessionID.Value, len(sessions))
+		renderTemplate(w, "login", map[string]interface{}{
+			"TestMode": config.TestMode,
+		})
+		return
+	}
+
+	log.Printf("Session found for ID: %s", sessionID.Value)
 
 	session := sessions[sessionID.Value]
 	templateData := map[string]interface{}{
@@ -356,6 +374,11 @@ func homeHandler(w http.ResponseWriter, r *http.Request) {
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if config.TestMode {
 		http.Redirect(w, r, "/auth/test-login", http.StatusTemporaryRedirect)
+		return
+	}
+
+	if oauth2Config == nil {
+		http.Error(w, "OAuth2 not configured", http.StatusInternalServerError)
 		return
 	}
 
@@ -380,6 +403,12 @@ func testLoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Create a dummy session with test user info
 	sessionID := generateState()
+	if sessionID == "" {
+		http.Error(w, "Failed to generate session ID", http.StatusInternalServerError)
+		return
+	}
+
+	log.Printf("Test login: Creating session with ID: %s", sessionID)
 	sessions[sessionID] = &SessionData{
 		UserInfo: map[string]interface{}{
 			"name":  "Test User",
@@ -401,18 +430,64 @@ func testLoginHandler(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	http.SetCookie(w, &http.Cookie{
+	cookie := &http.Cookie{
 		Name:     "session_id",
 		Value:    sessionID,
+		Path:     "/",
 		MaxAge:   3600,
 		HttpOnly: true,
 		Secure:   false,
-	})
+		SameSite: http.SameSiteLaxMode,
+	}
 
+	log.Printf("Test login: Setting cookie: %+v", cookie)
+	http.SetCookie(w, cookie)
+
+	log.Printf("Test login: Redirecting to /")
 	http.Redirect(w, r, "/", http.StatusTemporaryRedirect)
 }
 
+func testCookieHandler(w http.ResponseWriter, _ *http.Request) {
+	if !config.TestMode {
+		http.Error(w, "Test mode not enabled", http.StatusForbidden)
+		return
+	}
+
+	testCookie := &http.Cookie{
+		Name:     "test_cookie",
+		Value:    "test_value",
+		Path:     "/",
+		MaxAge:   3600,
+		HttpOnly: false, // Make it visible in browser dev tools
+		Secure:   false,
+		SameSite: http.SameSiteLaxMode,
+	}
+
+	log.Printf("Test cookie: Setting cookie: %+v", testCookie)
+	http.SetCookie(w, testCookie)
+
+	w.Header().Set("Content-Type", "text/html")
+	fmt.Fprintf(w, `<html><body>
+		<h1>Test Cookie Set</h1>
+		<p>Cookie should be set. Check browser dev tools.</p>
+		<p><a href="/">Go back to home</a></p>
+		<script>
+			console.log('Document cookies:', document.cookie);
+		</script>
+	</body></html>`)
+}
+
 func callbackHandler(w http.ResponseWriter, r *http.Request) {
+	if config.TestMode {
+		http.Error(w, "Callback not available in test mode", http.StatusForbidden)
+		return
+	}
+
+	if oauth2Config == nil {
+		http.Error(w, "OAuth2 not configured", http.StatusInternalServerError)
+		return
+	}
+
 	stateCookie, err := r.Cookie("oauth_state")
 	if err != nil || stateCookie.Value != r.URL.Query().Get("state") {
 		http.Error(w, "Invalid state parameter", http.StatusBadRequest)
@@ -612,7 +687,59 @@ func generateScriptHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func viewHelmHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID, err := r.Cookie("session_id")
+	if err != nil || sessions[sessionID.Value] == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	session := sessions[sessionID.Value]
+
+	var helmContent strings.Builder
+	if err := helmTemplate.Execute(&helmContent, session.ConfigData); err != nil {
+		http.Error(w, "Failed to generate helm values", http.StatusInternalServerError)
+		return
+	}
+
+	renderTemplate(w, "file-view", map[string]interface{}{
+		"Title":    "Helm Values (values.yaml)",
+		"Content":  helmContent.String(),
+		"Filename": "values.yaml",
+		"Language": "yaml",
+		"TestMode": config.TestMode,
+	})
+}
+
+func viewScriptHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID, err := r.Cookie("session_id")
+	if err != nil || sessions[sessionID.Value] == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	session := sessions[sessionID.Value]
+
+	var scriptContent strings.Builder
+	if err := scriptTemplate.Execute(&scriptContent, session.ConfigData); err != nil {
+		http.Error(w, "Failed to generate install script", http.StatusInternalServerError)
+		return
+	}
+
+	renderTemplate(w, "file-view", map[string]interface{}{
+		"Title":    "Installation Script (interlink-install.sh)",
+		"Content":  scriptContent.String(),
+		"Filename": "interlink-install.sh",
+		"Language": "bash",
+		"TestMode": config.TestMode,
+	})
+}
+
 func getUserInfo(token *oauth2.Token) (map[string]interface{}, error) {
+	if oauth2Config == nil {
+		return nil, fmt.Errorf("OAuth2 not configured")
+	}
+
 	client := oauth2Config.Client(context.Background(), token)
 	resp, err := client.Get(config.OIDC.Issuer + "/userinfo")
 	if err != nil {
@@ -646,6 +773,9 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
     </style>
 </head>
 <body>
+		<script>
+			htmx.logAll();
+		</script>
     <div class="container">
         <h1>interLink WebUI</h1>
         <p>Please authenticate to continue</p>
@@ -655,6 +785,7 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
             <h3>🧪 Test Mode Enabled</h3>
             <p>You can use dummy authentication for testing purposes</p>
             <a href="/auth/test-login" class="btn btn-warning">Test Login (No OIDC)</a>
+            <a href="/test-cookie" class="btn btn-warning">Test Cookie</a>
         </div>
         {{end}}
     </div>
@@ -678,6 +809,9 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
     </style>
 </head>
 <body>
+		<script>
+			htmx.logAll();
+		</script>
     <div class="header">
         <h1>interLink WebUI Dashboard</h1>
         <div>
@@ -703,10 +837,14 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
     
     <div class="card">
         <h2>Generate Files</h2>
-        <p>Download the generated Helm values and installation script for your deployment.</p>
+        <p>Download or view the generated Helm values and installation script for your deployment.</p>
         <div class="actions">
-            <button hx-post="/generate/helm" hx-trigger="click" class="btn">Download Helm Values</button>
-            <button hx-post="/generate/script" hx-trigger="click" class="btn">Download Install Script</button>
+            <a href="/generate/helm" class="btn" download="values.yaml">📥 Download Helm Values</a>
+            <a href="/view/helm" class="btn btn-secondary">👁️ View Helm Values</a>
+        </div>
+        <div class="actions">
+            <a href="/generate/script" class="btn" download="interlink-install.sh">📥 Download Install Script</a>
+            <a href="/view/script" class="btn btn-secondary">👁️ View Install Script</a>
         </div>
     </div>
 </body>
@@ -957,6 +1095,94 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
                            '</select>' +
                            '<button type="button" class="btn btn-danger btn-small" onclick="this.parentElement.remove()">Remove</button>';
             container.appendChild(div);
+        }
+    </script>
+</body>
+</html>`,
+		"file-view": `<!DOCTYPE html>
+<html>
+<head>
+    <title>{{.Title}} - interLink WebUI</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; background: #f5f5f5; }
+        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
+        .btn { background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border: none; border-radius: 5px; cursor: pointer; margin: 0 5px; }
+        .btn:hover { background: #0056b3; }
+        .btn-secondary { background: #6c757d; }
+        .btn-secondary:hover { background: #545b62; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
+        .content-container { background: white; border-radius: 8px; padding: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .file-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 2px solid #e9ecef; }
+        .file-title { color: #333; margin: 0; }
+        .file-actions { display: flex; gap: 10px; }
+        .code-container { position: relative; }
+        .code-block { background: #f8f9fa; border: 1px solid #e9ecef; border-radius: 4px; padding: 15px; font-family: 'Courier New', monospace; font-size: 14px; line-height: 1.4; white-space: pre-wrap; overflow-x: auto; margin: 0; }
+        .copy-btn { position: absolute; top: 10px; right: 10px; }
+        .copy-success { background: #d4edda !important; color: #155724 !important; }
+        .filename { background: #e9ecef; padding: 5px 10px; border-radius: 3px; font-family: monospace; font-size: 12px; color: #495057; margin-bottom: 10px; display: inline-block; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>{{.Title}}</h1>
+        <div>
+            {{if .TestMode}}<span style="background: #fff3cd; padding: 5px 10px; border-radius: 3px; margin-right: 10px;">🧪 Test Mode</span>{{end}}
+            <a href="/" class="btn btn-secondary">Back to Dashboard</a>
+            <a href="/auth/logout" class="btn btn-secondary">Logout</a>
+        </div>
+    </div>
+    
+    <div class="content-container">
+        <div class="file-header">
+            <h2 class="file-title">Generated File Content</h2>
+            <div class="file-actions">
+                <a href="/generate/{{if eq .Language "yaml"}}helm{{else}}script{{end}}" class="btn btn-success" download="{{.Filename}}">📥 Download File</a>
+                <button id="copyBtn" class="btn btn-secondary" onclick="copyToClipboard()">📋 Copy to Clipboard</button>
+            </div>
+        </div>
+        
+        <div class="filename">{{.Filename}}</div>
+        
+        <div class="code-container">
+            <pre class="code-block" id="codeContent">{{.Content}}</pre>
+        </div>
+    </div>
+    
+    <script>
+        function copyToClipboard() {
+            const content = document.getElementById('codeContent').textContent;
+            const copyBtn = document.getElementById('copyBtn');
+            
+            navigator.clipboard.writeText(content).then(function() {
+                const originalText = copyBtn.innerHTML;
+                copyBtn.innerHTML = '✅ Copied!';
+                copyBtn.classList.add('copy-success');
+                
+                setTimeout(function() {
+                    copyBtn.innerHTML = originalText;
+                    copyBtn.classList.remove('copy-success');
+                }, 2000);
+            }).catch(function(err) {
+                console.error('Failed to copy: ', err);
+                // Fallback for older browsers
+                const textArea = document.createElement('textarea');
+                textArea.value = content;
+                document.body.appendChild(textArea);
+                textArea.select();
+                document.execCommand('copy');
+                document.body.removeChild(textArea);
+                
+                const originalText = copyBtn.innerHTML;
+                copyBtn.innerHTML = '✅ Copied!';
+                copyBtn.classList.add('copy-success');
+                
+                setTimeout(function() {
+                    copyBtn.innerHTML = originalText;
+                    copyBtn.classList.remove('copy-success');
+                }, 2000);
+            });
         }
     </script>
 </body>

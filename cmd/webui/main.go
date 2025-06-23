@@ -763,29 +763,180 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
     <title>interLink WebUI - Login</title>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-        .container { text-align: center; margin-top: 100px; }
-        .btn { background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin: 5px; }
-        .btn:hover { background: #0056b3; }
-        .btn-warning { background: #ffc107; color: #212529; }
-        .btn-warning:hover { background: #e0a800; }
-        .test-mode-info { background: #fff3cd; border: 1px solid #ffeaa7; border-radius: 5px; padding: 15px; margin: 20px 0; }
+        :root {
+            --primary-color: #ff6600;
+            --primary-dark: #cc5200;
+            --secondary-color: #2c3e50;
+            --background: #f8f9fa;
+            --surface: #ffffff;
+            --text-primary: #2c3e50;
+            --text-secondary: #6c757d;
+            --border: #dee2e6;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+        }
+        
+        * { box-sizing: border-box; }
+        
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            max-width: 900px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background: linear-gradient(135deg, var(--background) 0%, #e9ecef 100%);
+            min-height: 100vh;
+            color: var(--text-primary);
+        }
+        
+        .header-logo {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 40px;
+        }
+        
+        .header-logo img {
+            height: 60px;
+            width: auto;
+            max-width: 120px;
+            margin-right: 15px;
+            object-fit: contain;
+        }
+        
+        .header-logo h1 {
+            color: var(--secondary-color);
+            font-size: 2.5rem;
+            margin: 0;
+            font-weight: 300;
+        }
+        
+        .container { 
+            text-align: center; 
+            margin-top: 40px; 
+            background: var(--surface);
+            padding: 40px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1.1rem;
+            margin-bottom: 30px;
+        }
+        
+        .btn { 
+            background: var(--primary-color); 
+            color: white; 
+            padding: 12px 24px; 
+            text-decoration: none; 
+            border-radius: 8px; 
+            display: inline-block; 
+            margin: 8px; 
+            font-weight: 500;
+            border: none;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 1rem;
+        }
+        
+        .btn:hover { 
+            background: var(--primary-dark); 
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(255, 102, 0, 0.3);
+        }
+        
+        .btn-warning { 
+            background: var(--warning); 
+            color: var(--secondary-color); 
+        }
+        
+        .btn-warning:hover { 
+            background: #e0a800; 
+            transform: translateY(-1px);
+        }
+        
+        .test-mode-info { 
+            background: linear-gradient(45deg, #fff3cd, #ffeaa7); 
+            border: 1px solid var(--warning); 
+            border-radius: 8px; 
+            padding: 20px; 
+            margin: 30px 0;
+            box-shadow: 0 2px 4px rgba(255, 193, 7, 0.2);
+        }
+        
+        .test-mode-info h3 {
+            color: var(--secondary-color);
+            margin-top: 0;
+        }
+        
+        .feature-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin: 30px 0;
+            text-align: left;
+        }
+        
+        .feature-card {
+            background: var(--surface);
+            padding: 20px;
+            border-radius: 8px;
+            border-left: 4px solid var(--primary-color);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+        
+        .feature-card h4 {
+            color: var(--secondary-color);
+            margin-top: 0;
+            margin-bottom: 10px;
+        }
+        
+        .feature-card p {
+            color: var(--text-secondary);
+            margin: 0;
+            font-size: 0.9rem;
+        }
     </style>
 </head>
 <body>
 		<script>
 			htmx.logAll();
 		</script>
-    <div class="container">
+    <div class="header-logo">
+        <img src="/static/img/interlink_logo.png" alt="interLink Logo" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIyMCIgY3k9IjIwIiByPSIyMCIgZmlsbD0iI2ZmNjYwMCIvPjx0ZXh0IHg9IjIwIiB5PSIyNSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNiIgZm9udC13ZWlnaHQ9ImJvbGQiPmlMPC90ZXh0Pjwvc3ZnPg=='; this.style.width='40px'; this.style.height='40px';">
         <h1>interLink WebUI</h1>
-        <p>Please authenticate to continue</p>
-        <a href="/auth/login" class="btn">Login with OIDC</a>
+    </div>
+    
+    <div class="container">
+        <p class="subtitle">Configure and deploy interLink with an intuitive web interface</p>
+        
+        <div class="feature-grid">
+            <div class="feature-card">
+                <h4>🔐 Secure Authentication</h4>
+                <p>OIDC-based authentication with support for multiple providers including GitHub and custom OIDC endpoints.</p>
+            </div>
+            <div class="feature-card">
+                <h4>⚙️ Interactive Configuration</h4>
+                <p>Web-based forms for configuring Virtual Kubelet nodes, resource limits, OAuth settings, and more.</p>
+            </div>
+            <div class="feature-card">
+                <h4>📁 File Generation</h4>
+                <p>Automatically generate Helm values and installation scripts based on your configuration.</p>
+            </div>
+        </div>
+        
+        <a href="/auth/login" class="btn">🚀 Login with OIDC</a>
+        
         {{if .TestMode}}
         <div class="test-mode-info">
             <h3>🧪 Test Mode Enabled</h3>
-            <p>You can use dummy authentication for testing purposes</p>
-            <a href="/auth/test-login" class="btn btn-warning">Test Login (No OIDC)</a>
-            <a href="/test-cookie" class="btn btn-warning">Test Cookie</a>
+            <p>You can use dummy authentication for development and testing purposes</p>
+            <div style="margin-top: 15px;">
+                <a href="/auth/test-login" class="btn btn-warning">Test Login (No OIDC)</a>
+                <a href="/test-cookie" class="btn btn-warning">Test Cookie</a>
+            </div>
         </div>
         {{end}}
     </div>
@@ -797,15 +948,216 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
     <title>interLink WebUI - Dashboard</title>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
-        .user-info { background: #f8f9fa; padding: 15px; border-radius: 5px; margin-bottom: 20px; }
-        .btn { background: #007bff; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; border: none; cursor: pointer; }
-        .btn:hover { background: #0056b3; }
-        .btn-secondary { background: #6c757d; }
-        .btn-secondary:hover { background: #545b62; }
-        .card { background: white; border: 1px solid #ddd; border-radius: 5px; padding: 20px; margin-bottom: 20px; }
-        .actions { display: flex; gap: 10px; margin-top: 20px; }
+        :root {
+            --primary-color: #ff6600;
+            --primary-dark: #cc5200;
+            --secondary-color: #2c3e50;
+            --background: #f8f9fa;
+            --surface: #ffffff;
+            --text-primary: #2c3e50;
+            --text-secondary: #6c757d;
+            --border: #dee2e6;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+        }
+        
+        * { box-sizing: border-box; }
+        
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background: linear-gradient(135deg, var(--background) 0%, #e9ecef 100%);
+            min-height: 100vh;
+            color: var(--text-primary);
+        }
+        
+        .header { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-bottom: 30px; 
+            background: var(--surface);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header-logo {
+            display: flex;
+            align-items: center;
+        }
+        
+        .header-logo img {
+            height: 40px;
+            width: auto;
+            max-width: 80px;
+            margin-right: 12px;
+            object-fit: contain;
+        }
+        
+        .header-logo h1 {
+            color: var(--secondary-color);
+            font-size: 1.8rem;
+            margin: 0;
+            font-weight: 300;
+        }
+        
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .test-mode-badge {
+            background: linear-gradient(45deg, var(--warning), #ffeaa7);
+            color: var(--secondary-color);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            border: 1px solid var(--warning);
+        }
+        
+        .user-info { 
+            background: linear-gradient(135deg, var(--surface) 0%, #f1f3f4 100%);
+            padding: 20px; 
+            border-radius: 12px; 
+            margin-bottom: 25px;
+            border-left: 4px solid var(--primary-color);
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.05);
+        }
+        
+        .user-info strong {
+            color: var(--secondary-color);
+            font-size: 1.1rem;
+        }
+        
+        .user-info p {
+            margin: 5px 0 0 0;
+            color: var(--text-secondary);
+        }
+        
+        .btn { 
+            background: var(--primary-color); 
+            color: white; 
+            padding: 12px 20px; 
+            text-decoration: none; 
+            border-radius: 8px; 
+            border: none; 
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn:hover { 
+            background: var(--primary-dark); 
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(255, 102, 0, 0.3);
+        }
+        
+        .btn-secondary { 
+            background: var(--secondary-color); 
+        }
+        
+        .btn-secondary:hover { 
+            background: #34495e; 
+            box-shadow: 0 4px 8px rgba(44, 62, 80, 0.3);
+        }
+        
+        .btn-success {
+            background: var(--success);
+        }
+        
+        .btn-success:hover {
+            background: #218838;
+            box-shadow: 0 4px 8px rgba(40, 167, 69, 0.3);
+        }
+        
+        .card { 
+            background: var(--surface); 
+            border: 1px solid var(--border); 
+            border-radius: 12px; 
+            padding: 25px; 
+            margin-bottom: 25px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        
+        .card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        .card h2 {
+            color: var(--secondary-color);
+            margin-top: 0;
+            margin-bottom: 12px;
+            font-size: 1.4rem;
+            font-weight: 600;
+        }
+        
+        .card p {
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+        
+        .actions { 
+            display: flex; 
+            flex-wrap: wrap;
+            gap: 12px; 
+            margin-top: 20px; 
+        }
+        
+        .deployment-steps {
+            background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+            border-radius: 12px;
+            padding: 25px;
+            margin-bottom: 25px;
+            border-left: 4px solid var(--primary-color);
+        }
+        
+        .deployment-steps h3 {
+            color: var(--secondary-color);
+            margin-top: 0;
+            margin-bottom: 15px;
+        }
+        
+        .step-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        
+        .step-list li {
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(44, 62, 80, 0.1);
+            color: var(--text-secondary);
+        }
+        
+        .step-list li:last-child {
+            border-bottom: none;
+        }
+        
+        .step-number {
+            background: var(--primary-color);
+            color: white;
+            width: 24px;
+            height: 24px;
+            border-radius: 50%;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-right: 12px;
+        }
     </style>
 </head>
 <body>
@@ -813,38 +1165,89 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
 			htmx.logAll();
 		</script>
     <div class="header">
-        <h1>interLink WebUI Dashboard</h1>
-        <div>
-            {{if .TestMode}}<span style="background: #fff3cd; padding: 5px 10px; border-radius: 3px; margin-right: 10px;">🧪 Test Mode</span>{{end}}
+        <div class="header-logo">
+            <img src="/static/img/interlink_logo.png" alt="interLink Logo" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIyMCIgY3k9IjIwIiByPSIyMCIgZmlsbD0iI2ZmNjYwMCIvPjx0ZXh0IHg9IjIwIiB5PSIyNSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNiIgZm9udC13ZWlnaHQ9ImJvbGQiPmlMPC90ZXh0Pjwvc3ZnPg=='; this.style.width='40px'; this.style.height='40px';">
+            <h1>interLink WebUI Dashboard</h1>
+        </div>
+        <div class="header-actions">
+            {{if .TestMode}}<span class="test-mode-badge">🧪 Test Mode</span>{{end}}
             <a href="/auth/logout" class="btn btn-secondary">Logout</a>
         </div>
     </div>
     
     {{if .UserInfo}}
     <div class="user-info">
-        <strong>Welcome, {{.UserInfo.name}}!</strong>
-        <p>Email: {{.UserInfo.email}}</p>
+        <strong>👋 Welcome, {{.UserInfo.name}}!</strong>
+        <p>📧 {{.UserInfo.email}}</p>
     </div>
     {{end}}
     
+    <div class="deployment-steps">
+        <h3>🚀 Deployment Workflow</h3>
+        <ul class="step-list">
+            <li><span class="step-number">1</span><strong>Configure:</strong> Set up your interLink deployment parameters below</li>
+            <li><span class="step-number">2</span><strong>Generate:</strong> Download Helm values and installation scripts</li>
+            <li><span class="step-number">3</span><strong>Deploy:</strong> Use Helm to deploy Virtual Kubelet to your cluster</li>
+            <li><span class="step-number">4</span><strong>Install:</strong> Run the script on your remote server to set up interLink API</li>
+        </ul>
+    </div>
+    
     <div class="card">
-        <h2>Configuration</h2>
-        <p>Configure your interLink deployment settings and generate the necessary files.</p>
+        <h2>⚙️ Configuration</h2>
+        <p>Configure your interLink deployment settings including Virtual Kubelet node parameters, resource limits, OAuth settings, and node labels/taints. All configuration is session-based and secure.</p>
         <div class="actions">
-            <a href="/configure" class="btn">Configure Deployment</a>
+            <a href="/configure" class="btn">🔧 Configure Deployment</a>
         </div>
     </div>
     
     <div class="card">
-        <h2>Generate Files</h2>
-        <p>Download or view the generated Helm values and installation script for your deployment.</p>
+        <h2>📁 Generate Files</h2>
+        <p>Generate deployment files based on your configuration. Download files directly or view them with syntax highlighting and copy functionality.</p>
+        
+        <h4 style="color: var(--secondary-color); margin: 20px 0 10px 0;">Helm Chart Values</h4>
+        <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 15px;">
+            Kubernetes deployment configuration for Virtual Kubelet with your custom settings.
+        </p>
         <div class="actions">
-            <a href="/generate/helm" class="btn" download="values.yaml">📥 Download Helm Values</a>
-            <a href="/view/helm" class="btn btn-secondary">👁️ View Helm Values</a>
+            <a href="/generate/helm" class="btn btn-success" download="values.yaml">📥 Download values.yaml</a>
+            <a href="/view/helm" class="btn btn-secondary">👁️ View & Copy</a>
         </div>
+        
+        <h4 style="color: var(--secondary-color); margin: 20px 0 10px 0;">Installation Script</h4>
+        <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 15px;">
+            Bash script to install and configure interLink API server on your remote infrastructure.
+        </p>
         <div class="actions">
-            <a href="/generate/script" class="btn" download="interlink-install.sh">📥 Download Install Script</a>
-            <a href="/view/script" class="btn btn-secondary">👁️ View Install Script</a>
+            <a href="/generate/script" class="btn btn-success" download="interlink-install.sh">📥 Download interlink-install.sh</a>
+            <a href="/view/script" class="btn btn-secondary">👁️ View & Copy</a>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h2>📚 Quick Start Guide</h2>
+        <p>New to interLink? Follow these steps to get started:</p>
+        
+        <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin: 15px 0;">
+            <h4 style="margin-top: 0; color: var(--secondary-color);">What is interLink?</h4>
+            <p style="margin-bottom: 0; font-size: 0.9rem; color: var(--text-secondary);">
+                interLink is a CNCF project that provides an abstraction layer for executing Kubernetes pods on remote resources like HPC clusters, batch systems, or cloud providers while maintaining the standard Kubernetes API interface.
+            </p>
+        </div>
+        
+        <h4 style="color: var(--secondary-color); margin: 15px 0 10px 0;">Deployment Commands</h4>
+        <div style="background: #2c3e50; color: #ecf0f1; padding: 15px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 0.85rem; margin: 10px 0;">
+            <div style="margin-bottom: 10px;"># Deploy Virtual Kubelet with Helm</div>
+            <div style="margin-bottom: 10px;">helm upgrade --install --create-namespace \\</div>
+            <div style="margin-bottom: 10px;">&nbsp;&nbsp;-n &lt;namespace&gt; &lt;node-name&gt; \\</div>
+            <div style="margin-bottom: 10px;">&nbsp;&nbsp;oci://ghcr.io/interlink-hq/interlink-helm-chart/interlink \\</div>
+            <div>&nbsp;&nbsp;--values values.yaml</div>
+        </div>
+        
+        <div style="background: #2c3e50; color: #ecf0f1; padding: 15px; border-radius: 8px; font-family: 'Courier New', monospace; font-size: 0.85rem; margin: 10px 0;">
+            <div style="margin-bottom: 10px;"># Install interLink on remote server</div>
+            <div style="margin-bottom: 10px;">chmod +x interlink-install.sh</div>
+            <div style="margin-bottom: 10px;">./interlink-install.sh install</div>
+            <div>./interlink-install.sh start</div>
         </div>
     </div>
 </body>
@@ -855,33 +1258,277 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
     <title>interLink WebUI - Configure</title>
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <style>
-        body { font-family: Arial, sans-serif; max-width: 1200px; margin: 0 auto; padding: 20px; }
-        .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; }
-        .form-group { margin-bottom: 15px; }
-        .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
-        .form-group input, .form-group select, .form-group textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 4px; }
-        .form-group textarea { height: 100px; }
-        .btn { background: #007bff; color: white; padding: 10px 20px; border: none; border-radius: 5px; cursor: pointer; }
-        .btn:hover { background: #0056b3; }
-        .btn-secondary { background: #6c757d; }
-        .btn-secondary:hover { background: #545b62; }
-        .section { background: white; border: 1px solid #ddd; border-radius: 5px; padding: 20px; margin-bottom: 20px; }
-        .section h3 { margin-top: 0; color: #333; }
-        .row { display: flex; gap: 20px; }
-        .col { flex: 1; }
-        .dynamic-list { border: 1px solid #ddd; padding: 15px; border-radius: 4px; margin-top: 10px; }
-        .dynamic-item { display: flex; gap: 10px; margin-bottom: 10px; align-items: center; }
-        .dynamic-item input { flex: 1; }
-        .btn-small { padding: 5px 10px; font-size: 12px; }
-        .btn-danger { background: #dc3545; }
-        .btn-danger:hover { background: #c82333; }
+        :root {
+            --primary-color: #ff6600;
+            --primary-dark: #cc5200;
+            --secondary-color: #2c3e50;
+            --background: #f8f9fa;
+            --surface: #ffffff;
+            --text-primary: #2c3e50;
+            --text-secondary: #6c757d;
+            --border: #dee2e6;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+            --info: #17a2b8;
+        }
+        
+        * { box-sizing: border-box; }
+        
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            max-width: 1400px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background: linear-gradient(135deg, var(--background) 0%, #e9ecef 100%);
+            min-height: 100vh;
+            color: var(--text-primary);
+        }
+        
+        .header { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-bottom: 30px; 
+            background: var(--surface);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header-logo {
+            display: flex;
+            align-items: center;
+        }
+        
+        .header-logo img {
+            height: 40px;
+            width: auto;
+            max-width: 80px;
+            margin-right: 12px;
+            object-fit: contain;
+        }
+        
+        .header-logo h1 {
+            color: var(--secondary-color);
+            font-size: 1.8rem;
+            margin: 0;
+            font-weight: 300;
+        }
+        
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .test-mode-badge {
+            background: linear-gradient(45deg, var(--warning), #ffeaa7);
+            color: var(--secondary-color);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            border: 1px solid var(--warning);
+        }
+        
+        .form-group { 
+            margin-bottom: 20px; 
+        }
+        
+        .form-group label { 
+            display: block; 
+            margin-bottom: 8px; 
+            font-weight: 600; 
+            color: var(--secondary-color);
+            font-size: 0.95rem;
+        }
+        
+        .form-group input, .form-group select, .form-group textarea { 
+            width: 100%; 
+            padding: 12px; 
+            border: 2px solid var(--border); 
+            border-radius: 8px; 
+            font-size: 0.95rem;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .form-group input:focus, .form-group select:focus, .form-group textarea:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(255, 102, 0, 0.1);
+        }
+        
+        .form-group textarea { 
+            height: 120px; 
+            resize: vertical;
+            font-family: 'Courier New', monospace;
+        }
+        
+        .field-help {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 5px;
+            line-height: 1.4;
+        }
+        
+        .field-help code {
+            background: #f8f9fa;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            color: var(--secondary-color);
+        }
+        
+        .btn { 
+            background: var(--primary-color); 
+            color: white; 
+            padding: 12px 20px; 
+            border: none; 
+            border-radius: 8px; 
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            font-size: 0.95rem;
+        }
+        
+        .btn:hover { 
+            background: var(--primary-dark); 
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(255, 102, 0, 0.3);
+        }
+        
+        .btn-secondary { 
+            background: var(--secondary-color); 
+        }
+        
+        .btn-secondary:hover { 
+            background: #34495e; 
+            box-shadow: 0 4px 8px rgba(44, 62, 80, 0.3);
+        }
+        
+        .section { 
+            background: var(--surface); 
+            border: 1px solid var(--border); 
+            border-radius: 12px; 
+            padding: 25px; 
+            margin-bottom: 25px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+        }
+        
+        .section h3 { 
+            margin-top: 0; 
+            margin-bottom: 20px;
+            color: var(--secondary-color);
+            font-size: 1.3rem;
+            font-weight: 600;
+            border-bottom: 2px solid var(--primary-color);
+            padding-bottom: 10px;
+        }
+        
+        .section-description {
+            background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border-left: 4px solid var(--info);
+        }
+        
+        .section-description p {
+            margin: 0;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            line-height: 1.5;
+        }
+        
+        .row { 
+            display: flex; 
+            gap: 25px; 
+        }
+        
+        .col { 
+            flex: 1; 
+        }
+        
+        .dynamic-list { 
+            border: 2px solid var(--border); 
+            padding: 15px; 
+            border-radius: 8px; 
+            margin-top: 15px;
+            background: #f8f9fa;
+        }
+        
+        .dynamic-item { 
+            display: flex; 
+            gap: 10px; 
+            margin-bottom: 12px; 
+            align-items: center; 
+        }
+        
+        .dynamic-item input, .dynamic-item select { 
+            flex: 1; 
+            margin-bottom: 0;
+        }
+        
+        .btn-small { 
+            padding: 8px 12px; 
+            font-size: 0.8rem; 
+        }
+        
+        .btn-danger { 
+            background: var(--danger); 
+        }
+        
+        .btn-danger:hover { 
+            background: #c82333; 
+            box-shadow: 0 4px 8px rgba(220, 53, 69, 0.3);
+        }
+        
+        .save-section {
+            background: linear-gradient(135deg, var(--success) 0%, #20c997 100%);
+            color: white;
+            text-align: center;
+            padding: 20px;
+            border-radius: 12px;
+            margin-top: 30px;
+        }
+        
+        .save-section .btn {
+            background: white;
+            color: var(--success);
+            font-weight: 600;
+            font-size: 1.1rem;
+            padding: 15px 30px;
+        }
+        
+        .save-section .btn:hover {
+            background: #f8f9fa;
+            transform: translateY(-2px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.2);
+        }
+        
+        @media (max-width: 768px) {
+            .row {
+                flex-direction: column;
+                gap: 0;
+            }
+            
+            .header {
+                flex-direction: column;
+                gap: 15px;
+                text-align: center;
+            }
+        }
     </style>
 </head>
 <body>
     <div class="header">
-        <h1>Configure Deployment</h1>
-        <div>
-            {{if .TestMode}}<span style="background: #fff3cd; padding: 5px 10px; border-radius: 3px; margin-right: 10px;">🧪 Test Mode</span>{{end}}
+        <div class="header-logo">
+            <img src="/static/img/interlink_logo.png" alt="interLink Logo" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIyMCIgY3k9IjIwIiByPSIyMCIgZmlsbD0iI2ZmNjYwMCIvPjx0ZXh0IHg9IjIwIiB5PSIyNSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNiIgZm9udC13ZWlnaHQ9ImJvbGQiPmlMPC90ZXh0Pjwvc3ZnPg=='; this.style.width='40px'; this.style.height='40px';">
+            <h1>Configure Deployment</h1>
+        </div>
+        <div class="header-actions">
+            {{if .TestMode}}<span class="test-mode-badge">🧪 Test Mode</span>{{end}}
             <a href="/" class="btn btn-secondary">Back to Dashboard</a>
             <a href="/auth/logout" class="btn btn-secondary">Logout</a>
         </div>
@@ -889,16 +1536,27 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
     
     <form hx-post="/configure" hx-trigger="submit" hx-target="body">
         <div class="section">
-            <h3>Basic Configuration</h3>
+            <h3>⚙️ Basic Configuration</h3>
+            <div class="section-description">
+                <p><strong>Core settings for your interLink deployment.</strong> These parameters define how your Virtual Kubelet node will appear in Kubernetes and where the interLink API server will be deployed.</p>
+            </div>
             <div class="row">
                 <div class="col">
                     <div class="form-group">
                         <label for="vk_name">Virtual Kubelet Node Name:</label>
                         <input type="text" id="vk_name" name="vk_name" value="{{.ConfigData.VKName}}" required>
+                        <div class="field-help">
+                            The name that will appear in <code>kubectl get nodes</code>. Must be unique within your cluster.
+                            <br><strong>Example:</strong> <code>my-hpc-node</code>, <code>cloud-bursting-node</code>
+                        </div>
                     </div>
                     <div class="form-group">
                         <label for="namespace">Kubernetes Namespace:</label>
                         <input type="text" id="namespace" name="namespace" value="{{.ConfigData.Namespace}}" required>
+                        <div class="field-help">
+                            Kubernetes namespace where the Virtual Kubelet will be deployed. Will be created if it doesn't exist.
+                            <br><strong>Default:</strong> <code>interlink</code>
+                        </div>
                     </div>
                     <div class="form-group">
                         <label for="interlink_version">interLink Version:</label>

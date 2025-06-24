@@ -48,6 +48,15 @@ type InterLinkConfig struct {
 	DisableProjected bool              `yaml:"disable_projected_volumes"`
 	NodeLabels       map[string]string `yaml:"node_labels,omitempty"`
 	NodeTaints       []NodeTaint       `yaml:"node_taints,omitempty"`
+
+	// mTLS configuration
+	AuthMode         string             `yaml:"auth_mode,omitempty"` // "oauth" or authModeMTLS
+	MTLSEnabled      bool               `yaml:"mtls_enabled"`
+	MTLSCertificates *CertificateBundle `yaml:"-"` // Not serialized to YAML, used for generation
+
+	// Tunneled deployment configuration
+	DeploymentMode string          `yaml:"deployment_mode,omitempty"` // "edge-node" or "tunneled"
+	SSHTunnel      SSHTunnelConfig `yaml:"ssh_tunnel,omitempty"`
 }
 
 type Resources struct {
@@ -78,6 +87,18 @@ type NodeTaint struct {
 	Effect string `yaml:"effect"`
 }
 
+type SSHTunnelConfig struct {
+	RemoteHost     string      `yaml:"remote_host"`
+	RemotePort     int         `yaml:"remote_port"`
+	RemoteUser     string      `yaml:"remote_user"`
+	SSHPort        int         `yaml:"ssh_port"`
+	PrivateKeyPath string      `yaml:"private_key_path"`
+	HostKeyPath    string      `yaml:"host_key_path,omitempty"`
+	LocalSocket    string      `yaml:"local_socket"`
+	PluginPort     int         `yaml:"plugin_port"`
+	SSHKeys        *SSHKeyPair `yaml:"-"` // Not serialized to YAML, used for generation
+}
+
 type SessionData struct {
 	UserInfo   map[string]interface{}
 	Tokens     *oauth2.Token
@@ -93,6 +114,11 @@ type MonitorResult struct {
 	Duration   string    `json:"duration"`
 }
 
+const (
+	authModeMTLS       = "mtls"
+	deploymentTunneled = "tunneled"
+)
+
 var (
 	config         Config
 	sessions       = make(map[string]*SessionData)
@@ -104,9 +130,21 @@ var (
 const helmValuesTemplate = `nodeName: {{.VKName}}
 
 interlink:
+{{- if eq .DeploymentMode "tunneled"}}
+  address: unix://{{.SSHTunnel.LocalSocket}}
+  port: ""
+{{- else}}
   address: https://{{.InterLinkIP}}
   port: {{.InterLinkPort}}
+{{- end}}
   disableProjectedVolumes: {{.DisableProjected}}
+{{- if eq .AuthMode "mtls"}}
+  tls:
+    enabled: true
+    certFile: "/etc/interlink/certs/tls.crt"
+    keyFile: "/etc/interlink/certs/tls.key"
+    caCertFile: "/etc/interlink/certs/ca.crt"
+{{- end}}
 
 virtualNode:
   resources:
@@ -117,8 +155,19 @@ virtualNode:
     HTTP: null
     HTTPs: null
   HTTP:
+{{- if eq .AuthMode "mtls"}}
+    insecure: false
+    CACert: "/etc/vk/certs/ca.crt"
+{{- else}}
     CACert: {{ .CACert }}
-    Insecure: {{.HTTPInsecure}}
+    insecure: {{.HTTPInsecure}}
+{{- end}}
+  kubeletHTTP:
+{{- if eq .AuthMode "mtls"}}
+    insecure: false
+{{- else}}
+    insecure: true
+{{- end}}
 {{- if .NodeLabels}}
   nodeLabels:
 {{- range $key, $value := .NodeLabels}}
@@ -134,6 +183,7 @@ virtualNode:
 {{- end}}
 {{- end}}
 
+{{- if eq .AuthMode "oauth"}}
 OAUTH:
   enabled: {{if .OAUTH.ClientID}}true{{else}}false{{end}}
 {{- if .OAUTH.ClientID}}
@@ -143,6 +193,10 @@ OAUTH:
   RefreshToken: {{.OAUTH.RefreshToken}}
   GrantType: {{.OAUTH.GrantType}}
   Audience: {{.OAUTH.Audience}}
+{{- end}}
+{{- else}}
+OAUTH:
+  enabled: false
 {{- end}}
 `
 
@@ -327,8 +381,12 @@ func main() {
 	r.HandleFunc("/configure", configureHandler).Methods("GET", "POST")
 	r.HandleFunc("/generate/helm", generateHelmHandler).Methods("GET")
 	r.HandleFunc("/generate/script", generateScriptHandler).Methods("GET")
+	r.HandleFunc("/generate/mtls-manifest", generateMTLSManifestHandler).Methods("GET")
+	r.HandleFunc("/generate/mtls-script", generateMTLSScriptHandler).Methods("GET")
 	r.HandleFunc("/view/helm", viewHelmHandler).Methods("GET")
 	r.HandleFunc("/view/script", viewScriptHandler).Methods("GET")
+	r.HandleFunc("/view/mtls-manifest", viewMTLSManifestHandler).Methods("GET")
+	r.HandleFunc("/view/mtls-script", viewMTLSScriptHandler).Methods("GET")
 	r.HandleFunc("/monitor", monitorHandler).Methods("GET", "POST")
 	r.HandleFunc("/pingLink", pingLinkHandler).Methods("POST")
 
@@ -439,6 +497,13 @@ func testLoginHandler(w http.ResponseWriter, r *http.Request) {
 			},
 			HTTPInsecure:     true,
 			DisableProjected: true,
+			AuthMode:         "oauth",
+			DeploymentMode:   "edge-node",
+			SSHTunnel: SSHTunnelConfig{
+				SSHPort:     22,
+				PluginPort:  4000,
+				LocalSocket: "/tmp/interlink.sock",
+			},
 		},
 	}
 
@@ -534,6 +599,13 @@ func callbackHandler(w http.ResponseWriter, r *http.Request) {
 			},
 			HTTPInsecure:     true,
 			DisableProjected: true,
+			AuthMode:         "oauth",
+			DeploymentMode:   "edge-node",
+			SSHTunnel: SSHTunnelConfig{
+				SSHPort:     22,
+				PluginPort:  4000,
+				LocalSocket: "/tmp/interlink.sock",
+			},
 		},
 	}
 
@@ -643,14 +715,75 @@ func configureHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		configData.OAUTH.Scopes = scopes
 
-		w.Header().Set("HX-Trigger", "configUpdated")
-		templateData := map[string]interface{}{
-			"UserInfo":   session.UserInfo,
-			"ConfigData": session.ConfigData,
-			"Tokens":     session.Tokens,
-			"TestMode":   config.TestMode,
+		// Authentication mode and mTLS configuration
+		configData.AuthMode = r.FormValue("auth_mode")
+		configData.MTLSEnabled = r.FormValue("mtls_enabled") == "on"
+
+		// Deployment mode and SSH tunnel configuration
+		configData.DeploymentMode = r.FormValue("deployment_mode")
+
+		// Force mTLS for tunneled deployments
+		if configData.DeploymentMode == deploymentTunneled {
+			configData.AuthMode = authModeMTLS
+			configData.MTLSEnabled = true
+			sshPort := 22
+			if portStr := r.FormValue("ssh_port"); portStr != "" {
+				if p, err := strconv.Atoi(portStr); err == nil {
+					sshPort = p
+				}
+			}
+
+			pluginPort := 4000
+			if portStr := r.FormValue("ssh_plugin_port"); portStr != "" {
+				if p, err := strconv.Atoi(portStr); err == nil {
+					pluginPort = p
+				}
+			}
+
+			localSocket := r.FormValue("ssh_local_socket")
+			if localSocket == "" {
+				localSocket = "/tmp/interlink.sock"
+			}
+
+			configData.SSHTunnel = SSHTunnelConfig{
+				RemoteHost:     r.FormValue("ssh_remote_host"),
+				RemoteUser:     r.FormValue("ssh_remote_user"),
+				SSHPort:        sshPort,
+				PrivateKeyPath: "/opt/interlink/.ssh/id_rsa",
+				HostKeyPath:    "",
+				LocalSocket:    localSocket,
+				PluginPort:     pluginPort,
+			}
+
+			// Generate SSH keys automatically for tunneled deployment
+			sshKeys, err := GenerateSSHKeyPair()
+			if err != nil {
+				log.Printf("Failed to generate SSH keys: %v", err)
+				http.Error(w, "Failed to generate SSH keys", http.StatusInternalServerError)
+				return
+			}
+			configData.SSHTunnel.SSHKeys = sshKeys
+			log.Printf("Generated SSH key pair for tunneled deployment")
 		}
-		renderTemplate(w, "configure", templateData)
+
+		// Generate mTLS certificates if enabled
+		if configData.AuthMode == authModeMTLS && configData.MTLSEnabled {
+			commonName := "interlink-server"
+			if configData.InterLinkIP != "" {
+				// Generate certificates for the configured IP
+				certs, err := GenerateInterLinkCertificates(commonName, configData.InterLinkIP)
+				if err != nil {
+					log.Printf("Failed to generate mTLS certificates: %v", err)
+					http.Error(w, "Failed to generate mTLS certificates", http.StatusInternalServerError)
+					return
+				}
+				configData.MTLSCertificates = certs
+				log.Printf("Generated mTLS certificates for %s (%s)", commonName, configData.InterLinkIP)
+			}
+		}
+
+		// Redirect to home page after saving configuration
+		http.Redirect(w, r, "/", http.StatusSeeOther)
 		return
 	}
 
@@ -742,6 +875,112 @@ func viewScriptHandler(w http.ResponseWriter, r *http.Request) {
 		"Title":    "Installation Script (interlink-install.sh)",
 		"Content":  scriptContent.String(),
 		"Filename": "interlink-install.sh",
+		"Language": "bash",
+		"TestMode": config.TestMode,
+	})
+}
+
+func generateMTLSManifestHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID, err := r.Cookie("session_id")
+	if err != nil || sessions[sessionID.Value] == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	session := sessions[sessionID.Value]
+
+	if session.ConfigData.AuthMode != authModeMTLS || !session.ConfigData.MTLSEnabled || session.ConfigData.MTLSCertificates == nil {
+		http.Error(w, "mTLS not configured or certificates not generated", http.StatusBadRequest)
+		return
+	}
+
+	manifest := GenerateMTLSKubernetesManifest(session.ConfigData.MTLSCertificates, session.ConfigData.Namespace)
+
+	w.Header().Set("Content-Type", "application/x-yaml")
+	w.Header().Set("Content-Disposition", "attachment; filename=interlink-mtls-manifest.yaml")
+	if _, err := w.Write([]byte(manifest)); err != nil {
+		http.Error(w, "Failed to write manifest", http.StatusInternalServerError)
+	}
+}
+
+func generateMTLSScriptHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID, err := r.Cookie("session_id")
+	if err != nil || sessions[sessionID.Value] == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	session := sessions[sessionID.Value]
+
+	if session.ConfigData.AuthMode != authModeMTLS || !session.ConfigData.MTLSEnabled || session.ConfigData.MTLSCertificates == nil {
+		http.Error(w, "mTLS not configured or certificates not generated", http.StatusBadRequest)
+		return
+	}
+
+	var script string
+	if session.ConfigData.DeploymentMode == deploymentTunneled {
+		script = GenerateTunneledMTLSInstallScript(&session.ConfigData, session.ConfigData.MTLSCertificates)
+	} else {
+		script = GenerateMTLSInstallScript(&session.ConfigData, session.ConfigData.MTLSCertificates)
+	}
+
+	w.Header().Set("Content-Type", "application/x-sh")
+	w.Header().Set("Content-Disposition", "attachment; filename=interlink-mtls-install.sh")
+	if _, err := w.Write([]byte(script)); err != nil {
+		http.Error(w, "Failed to write script", http.StatusInternalServerError)
+	}
+}
+
+func viewMTLSManifestHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID, err := r.Cookie("session_id")
+	if err != nil || sessions[sessionID.Value] == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	session := sessions[sessionID.Value]
+
+	if session.ConfigData.AuthMode != authModeMTLS || !session.ConfigData.MTLSEnabled || session.ConfigData.MTLSCertificates == nil {
+		http.Error(w, "mTLS not configured or certificates not generated", http.StatusBadRequest)
+		return
+	}
+
+	manifest := GenerateMTLSKubernetesManifest(session.ConfigData.MTLSCertificates, session.ConfigData.Namespace)
+
+	renderTemplate(w, "file-view", map[string]interface{}{
+		"Title":    "mTLS Kubernetes Manifest (interlink-mtls-manifest.yaml)",
+		"Content":  manifest,
+		"Filename": "interlink-mtls-manifest.yaml",
+		"Language": "yaml",
+		"TestMode": config.TestMode,
+	})
+}
+
+func viewMTLSScriptHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID, err := r.Cookie("session_id")
+	if err != nil || sessions[sessionID.Value] == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	session := sessions[sessionID.Value]
+
+	if session.ConfigData.AuthMode != authModeMTLS || !session.ConfigData.MTLSEnabled || session.ConfigData.MTLSCertificates == nil {
+		http.Error(w, "mTLS not configured or certificates not generated", http.StatusBadRequest)
+		return
+	}
+
+	var script string
+	if session.ConfigData.DeploymentMode == deploymentTunneled {
+		script = GenerateTunneledMTLSInstallScript(&session.ConfigData, session.ConfigData.MTLSCertificates)
+	} else {
+		script = GenerateMTLSInstallScript(&session.ConfigData, session.ConfigData.MTLSCertificates)
+	}
+
+	renderTemplate(w, "file-view", map[string]interface{}{
+		"Title":    "mTLS Installation Script (interlink-mtls-install.sh)",
+		"Content":  script,
+		"Filename": "interlink-mtls-install.sh",
 		"Language": "bash",
 		"TestMode": config.TestMode,
 	})
@@ -1341,9 +1580,15 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
         <p>Generate deployment files based on your configuration. Download files directly or view them with syntax highlighting and copy functionality.</p>
         
         <h4 style="color: var(--secondary-color); margin: 20px 0 10px 0;">Helm Chart Values</h4>
+        {{if eq .ConfigData.DeploymentMode "tunneled"}}
+        <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 15px;">
+            🚇 <strong>Tunneled Deployment:</strong> Virtual Kubelet configuration for Unix socket communication with automatic mTLS certificate mounting and SSH tunnel connectivity.
+        </p>
+        {{else}}
         <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 15px;">
             Kubernetes deployment configuration for Virtual Kubelet with your custom settings.
         </p>
+        {{end}}
         <div class="actions">
             <a href="/generate/helm" class="btn btn-success" download="values.yaml">📥 Download values.yaml</a>
             <a href="/view/helm" class="btn btn-secondary">👁️ View & Copy</a>
@@ -1358,6 +1603,66 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
             <a href="/view/script" class="btn btn-secondary">👁️ View & Copy</a>
         </div>
     </div>
+    
+    {{if and (eq .ConfigData.AuthMode "mtls") .ConfigData.MTLSEnabled .ConfigData.MTLSCertificates}}
+    <div class="card">
+        <h2>🔐 mTLS Certificate Files</h2>
+        <p>Download the automatically generated mTLS certificates and deployment files for secure interLink communication.</p>
+        
+        <h4 style="color: var(--secondary-color); margin: 20px 0 10px 0;">Kubernetes Manifest with Certificates</h4>
+        <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 15px;">
+            Complete Kubernetes manifest including namespace, secrets with certificates, and configuration for mTLS deployment.
+        </p>
+        <div class="actions">
+            <a href="/generate/mtls-manifest" class="btn btn-success" download="interlink-mtls-manifest.yaml">📥 Download mTLS Manifest</a>
+            <a href="/view/mtls-manifest" class="btn btn-secondary">👁️ View & Copy</a>
+        </div>
+        
+        {{if eq .ConfigData.DeploymentMode "tunneled"}}
+        <h4 style="color: var(--secondary-color); margin: 20px 0 10px 0;">🚇 Tunneled mTLS Installation Script</h4>
+        <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 15px;">
+            Complete tunneled deployment script with automatic SSH key generation, mTLS certificates, systemd services, and secure SSH tunnel setup.
+        </p>
+        <div class="actions">
+            <a href="/generate/mtls-script" class="btn btn-success" download="interlink-tunneled-mtls-install.sh">📥 Download Tunneled Script</a>
+            <a href="/view/mtls-script" class="btn btn-secondary">👁️ View & Copy</a>
+        </div>
+        
+        <div style="background: linear-gradient(45deg, #fff3cd, #ffeaa7); border: 1px solid #fd7e14; border-radius: 8px; padding: 15px; margin: 15px 0;">
+            <h5 style="color: #e07500; margin-top: 0;">🚇 Tunneled Deployment Features</h5>
+            <ul style="margin: 10px 0; color: #e07500;">
+                <li><strong>🔑 Automatic SSH Key Generation:</strong> 4096-bit RSA keys generated automatically - no manual setup required!</li>
+                <li><strong>🔐 mTLS Security:</strong> Certificates and SSH keys work together for maximum security</li>
+                <li><strong>🔧 Complete systemd Integration:</strong> SSH tunnel, API server, and monitoring services</li>
+                <li><strong>📋 Clear Setup Instructions:</strong> Exact commands for remote server SSH key installation</li>
+                <li><strong>🌐 Secure Remote Connectivity:</strong> Encrypted tunnel through SSH with certificate authentication</li>
+            </ul>
+            <div style="background: #fff; border-left: 4px solid #fd7e14; padding: 10px; margin-top: 15px; border-radius: 4px;">
+                <strong>📋 SSH Setup:</strong> The script includes automatically generated SSH keys and provides exact instructions for installing the public key on your remote server.
+            </div>
+        </div>
+        {{else}}
+        <h4 style="color: var(--secondary-color); margin: 20px 0 10px 0;">mTLS Installation Script</h4>
+        <p style="font-size: 0.9rem; color: var(--text-secondary); margin-bottom: 15px;">
+            Automated script that creates certificates, Kubernetes secrets, and deploys interLink with mTLS authentication.
+        </p>
+        <div class="actions">
+            <a href="/generate/mtls-script" class="btn btn-success" download="interlink-mtls-install.sh">📥 Download mTLS Script</a>
+            <a href="/view/mtls-script" class="btn btn-secondary">👁️ View & Copy</a>
+        </div>
+        
+        <div style="background: linear-gradient(45deg, #e8f5e8, #d4edda); border: 1px solid #28a745; border-radius: 8px; padding: 15px; margin: 15px 0;">
+            <h5 style="color: #155724; margin-top: 0;">🔐 Security Benefits of mTLS</h5>
+            <ul style="margin: 10px 0; color: #155724;">
+                <li><strong>Strong Authentication:</strong> Cryptographic client and server verification</li>
+                <li><strong>No External Dependencies:</strong> Works without internet connectivity or external identity providers</li>
+                <li><strong>Automatic Certificate Generation:</strong> 4096-bit RSA keys with 1-year validity</li>
+                <li><strong>Zero Trust Architecture:</strong> Every connection is verified and encrypted</li>
+            </ul>
+        </div>
+        {{end}}
+    </div>
+    {{end}}
     
     <div class="card">
         <h2>🔍 Monitor Deployment</h2>
@@ -1869,6 +2174,126 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
         </div>
         
         <div class="section">
+            <h3>Authentication Mode</h3>
+            <div class="form-group">
+                <label for="auth_mode">Authentication Method:</label>
+                <select id="auth_mode" name="auth_mode" onchange="toggleAuthSections()">
+                    <option value="oauth" {{if eq .ConfigData.AuthMode "oauth"}}selected{{end}}>OAuth/OIDC Authentication</option>
+                    <option value="mtls" {{if eq .ConfigData.AuthMode "mtls"}}selected{{end}}>mTLS Certificate Authentication</option>
+                </select>
+                <div class="field-help">
+                    Choose between OAuth/OIDC authentication or mutual TLS (mTLS) certificate-based authentication.
+                    <br><strong>OAuth:</strong> Uses external identity provider for authentication
+                    <br><strong>mTLS:</strong> Uses client certificates for authentication (more secure, no external dependencies)
+                </div>
+            </div>
+            
+            <div id="mtls-section" style="display: none;">
+                <h4>🔐 mTLS Certificate Configuration</h4>
+                <div class="form-group">
+                    <input type="checkbox" id="mtls_enabled" name="mtls_enabled" {{if .ConfigData.MTLSEnabled}}checked{{end}}>
+                    <label for="mtls_enabled">Enable mTLS and generate certificates automatically</label>
+                    <div class="field-help">
+                        When enabled, certificates will be automatically generated for the interLink server and client authentication.
+                        This provides strong cryptographic authentication without requiring an external identity provider.
+                    </div>
+                </div>
+                
+                <div class="mtls-info" style="background: linear-gradient(45deg, #e8f5e8, #d4edda); border: 1px solid #28a745; border-radius: 8px; padding: 15px; margin: 15px 0;">
+                    <h5 style="color: #155724; margin-top: 0;">📋 mTLS Certificate Information</h5>
+                    <ul style="margin: 10px 0; color: #155724;">
+                        <li><strong>CA Certificate:</strong> Root certificate authority for signing</li>
+                        <li><strong>Server Certificate:</strong> For interLink API server TLS</li>
+                        <li><strong>Client Certificate:</strong> For Virtual Kubelet authentication</li>
+                        <li><strong>Automatic Generation:</strong> All certificates generated with 1-year validity</li>
+                        <li><strong>Security:</strong> 4096-bit RSA keys with SHA-256 signatures</li>
+                    </ul>
+                    <p style="margin: 10px 0; color: #155724;"><strong>Note:</strong> Certificates will be included in the generated Helm values and Kubernetes secrets.</p>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h3>Deployment Architecture</h3>
+            <div class="form-group">
+                <label for="deployment_mode">Deployment Mode:</label>
+                <select id="deployment_mode" name="deployment_mode" onchange="toggleDeploymentSections()">
+                    <option value="edge-node" {{if eq .ConfigData.DeploymentMode "edge-node"}}selected{{end}}>Edge Node (Remote)</option>
+                    <option value="tunneled" {{if eq .ConfigData.DeploymentMode "tunneled"}}selected{{end}}>Tunneled (Local + SSH)</option>
+                </select>
+                <div class="field-help">
+                    Choose your deployment architecture pattern.
+                    <br><strong>Edge Node:</strong> All components (VK, API, Plugin) deployed remotely on edge infrastructure (supports OAuth or mTLS)
+                    <br><strong>Tunneled:</strong> VK and API local, Plugin remote via SSH tunnel (requires mTLS, most secure)
+                </div>
+            </div>
+            
+            <div id="tunneled-section" style="display: none;">
+                <h4>🚇 SSH Tunnel Configuration</h4>
+                <div style="background: linear-gradient(45deg, #e8f5e8, #d4edda); border: 1px solid #28a745; border-radius: 8px; padding: 10px; margin: 10px 0;">
+                    <p style="margin: 0; color: #155724;"><strong>🔐 Security Features:</strong></p>
+                    <ul style="margin: 5px 0 0 20px; color: #155724;">
+                        <li>Automatically uses mTLS authentication for enhanced security</li>
+                        <li>SSH key pair will be generated automatically (4096-bit RSA)</li>
+                        <li>All certificates and keys included in generated scripts</li>
+                    </ul>
+                </div>
+                <div class="row">
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="ssh_remote_host">Remote Host:</label>
+                            <input type="text" id="ssh_remote_host" name="ssh_remote_host" value="{{.ConfigData.SSHTunnel.RemoteHost}}" placeholder="hpc-cluster.example.com">
+                            <div class="field-help">
+                                Hostname or IP address of the remote system where the plugin runs.
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="ssh_remote_user">Remote User:</label>
+                            <input type="text" id="ssh_remote_user" name="ssh_remote_user" value="{{.ConfigData.SSHTunnel.RemoteUser}}" placeholder="hpc-user">
+                            <div class="field-help">
+                                Username for SSH authentication on the remote system.
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label for="ssh_port">SSH Port:</label>
+                            <input type="number" id="ssh_port" name="ssh_port" value="{{if .ConfigData.SSHTunnel.SSHPort}}{{.ConfigData.SSHTunnel.SSHPort}}{{else}}22{{end}}" min="1" max="65535">
+                            <div class="field-help">
+                                SSH server port on the remote system (usually 22).
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="form-group">
+                            <label for="ssh_plugin_port">Plugin Port:</label>
+                            <input type="number" id="ssh_plugin_port" name="ssh_plugin_port" value="{{if .ConfigData.SSHTunnel.PluginPort}}{{.ConfigData.SSHTunnel.PluginPort}}{{else}}4000{{end}}" min="1" max="65535">
+                            <div class="field-help">
+                                Port where the remote plugin listens for connections.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="ssh_local_socket">Local Unix Socket Path:</label>
+                    <input type="text" id="ssh_local_socket" name="ssh_local_socket" value="{{if .ConfigData.SSHTunnel.LocalSocket}}{{.ConfigData.SSHTunnel.LocalSocket}}{{else}}/tmp/interlink.sock{{end}}">
+                    <div class="field-help">
+                        Path to local Unix socket for communication between VK and API server.
+                    </div>
+                </div>
+                
+                <div class="tunneled-info" style="background: linear-gradient(45deg, #e3f2fd, #bbdefb); border: 1px solid #2196f3; border-radius: 8px; padding: 15px; margin: 15px 0;">
+                    <h5 style="color: #0d47a1; margin-top: 0;">🚇 Tunneled Deployment Benefits</h5>
+                    <ul style="margin: 10px 0; color: #0d47a1;">
+                        <li><strong>NAT/Firewall Friendly:</strong> Only outbound SSH connection required</li>
+                        <li><strong>Local Control:</strong> Virtual Kubelet runs in your Kubernetes cluster</li>
+                        <li><strong>Secure Communication:</strong> All traffic encrypted through SSH tunnel</li>
+                        <li><strong>Flexible Networking:</strong> Works with complex network topologies</li>
+                        <li><strong>Plugin Isolation:</strong> Remote plugin runs in target environment</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+        
+        <div class="section">
             <button type="submit" class="btn">Save Configuration</button>
         </div>
     </form>
@@ -1898,6 +2323,68 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
                            '<button type="button" class="btn btn-danger btn-small" onclick="this.parentElement.remove()">Remove</button>';
             container.appendChild(div);
         }
+        
+        function toggleAuthSections() {
+            const authMode = document.getElementById('auth_mode').value;
+            const oauthSection = document.querySelector('.section h3[textContent*="OAuth"]')?.parentElement;
+            const mtlsSection = document.getElementById('mtls-section');
+            
+            if (authMode === 'mtls') {
+                if (mtlsSection) mtlsSection.style.display = 'block';
+                // Find OAuth section by looking for the heading
+                const sections = document.querySelectorAll('.section');
+                sections.forEach(section => {
+                    const heading = section.querySelector('h3');
+                    if (heading && heading.textContent.includes('OAuth Configuration')) {
+                        section.style.display = 'none';
+                    }
+                });
+            } else {
+                if (mtlsSection) mtlsSection.style.display = 'none';
+                const sections = document.querySelectorAll('.section');
+                sections.forEach(section => {
+                    const heading = section.querySelector('h3');
+                    if (heading && heading.textContent.includes('OAuth Configuration')) {
+                        section.style.display = 'block';
+                    }
+                });
+            }
+        }
+        
+        function toggleDeploymentSections() {
+            const deploymentMode = document.getElementById('deployment_mode').value;
+            const tunneledSection = document.getElementById('tunneled-section');
+            const authModeSelect = document.getElementById('auth_mode');
+            
+            if (deploymentMode === 'tunneled') {
+                if (tunneledSection) tunneledSection.style.display = 'block';
+                // Force mTLS for tunneled deployments
+                if (authModeSelect) {
+                    authModeSelect.value = 'mtls';
+                    authModeSelect.disabled = true;
+                }
+                // Enable mTLS checkbox
+                const mtlsCheckbox = document.getElementById('mtls_enabled');
+                if (mtlsCheckbox) {
+                    mtlsCheckbox.checked = true;
+                }
+            } else {
+                if (tunneledSection) tunneledSection.style.display = 'none';
+                // Re-enable auth mode selection for edge-node deployments
+                if (authModeSelect) {
+                    authModeSelect.disabled = false;
+                }
+            }
+            
+            // Update auth sections after changing auth mode
+            toggleAuthSections();
+        }
+        
+        // Initialize sections on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            toggleAuthSections();
+            toggleDeploymentSections();
+        });
     </script>
 </body>
 </html>`,

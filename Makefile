@@ -13,7 +13,7 @@ ssh-tunnel:
 	CGO_ENABLED=0 OOS=linux go build -o bin/ssh-tunnel cmd/ssh-tunnel/main.go
 
 webui:
-	CGO_ENABLED=0 OOS=linux go build -o bin/webui cmd/webui/main.go
+	CGO_ENABLED=0 OOS=linux go build -o bin/webui cmd/webui/main.go cmd/webui/cert-generator.go cmd/webui/generate-mtls-manifest.go cmd/webui/ssh-key-generator.go
 
 openapi:
 	go run cmd/openapi-gen/main.go

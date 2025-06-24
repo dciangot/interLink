@@ -17,18 +17,20 @@ It facilitates the development of provider-specific plugins for the [Kubernetes 
 
 ## Architecture
 
-The project consists of two main components:
+The project consists of three main components:
 
 - **Virtual Kubelet (Virtual Node)**: Translates Kubernetes pod execution requests into remote calls to the interLink API server
 - **interLink API Server**: A modular, pluggable REST server with provider-specific plugins (sidecars) for different execution environments
+- **WebUI**: A web-based configuration interface for simplified deployment setup, file generation, and monitoring
 
 ## Key Features
 
 - **Plugin-based Architecture**: Extensible sidecar system for different remote providers
 - **Multiple Deployment Patterns**: Edge-node, in-cluster, and tunneled configurations  
+- **Web-based Configuration UI**: Interactive webUI for generating deployment configurations and scripts
 - **Built-in Observability**: OpenTelemetry integration with distributed tracing and metrics
 - **Secure Communication**: TLS/mTLS encryption and authentication between components
-- **Authentication**: OAuth2 integration and bearer token support
+- **Authentication**: OAuth2 integration, mTLS, and bearer token support
 - **Standard Kubernetes API**: Maintains full compatibility with existing K8s tooling
 
 interLink is hosted by the
@@ -39,11 +41,53 @@ interLink is hosted by the
 For usage and development guides please refer to
 [our site](https://interlink-hq.github.io/interLink/)
 
+## Web-based Configuration UI
+
+interLink includes a web-based configuration interface that simplifies deployment setup and configuration generation. The webUI provides:
+
+### Features
+- **🔐 Authentication**: OIDC/OAuth2 login or test mode for development
+- **🏗️ Multiple Deployment Modes**: 
+  - **Edge-node**: Deploy API server and plugin on remote infrastructure
+  - **Tunneled**: Deploy API server locally with SSH tunnel to remote plugin
+- **🔒 Security Options**:
+  - **OAuth2**: Integration with external identity providers
+  - **mTLS**: Automatic certificate generation for mutual TLS authentication
+- **🔑 Automatic SSH Key Generation**: For tunneled deployments (4096-bit RSA keys)
+- **📁 File Generation**: Helm values, installation scripts, Kubernetes manifests
+- **📊 Endpoint Monitoring**: Built-in monitoring for deployed interLink endpoints
+
+### Quick Start
+```bash
+# Build the webUI
+make webui
+
+# Run in test mode (no OIDC required)
+./bin/webui --config webui-config-test.yaml
+
+# Access at http://localhost:8080
+```
+
+### Deployment Workflows
+1. **Configure**: Set authentication mode, deployment pattern, and resource limits
+2. **Generate**: Download Helm values, installation scripts, and manifests
+3. **Deploy**: Use generated files to deploy Virtual Kubelet and interLink components
+4. **Monitor**: Verify deployment health through built-in endpoint monitoring
+
+The webUI automatically handles complex configurations like certificate generation, SSH key setup, and systemd service creation, making interLink deployment accessible to users of all technical levels.
+
 ## Development
 
 ```bash
-# Build all components
+# Build all components (includes webUI)
 make all
+
+# Build individual components
+make interlink       # interLink API server
+make vk             # Virtual Kubelet
+make webui          # Web-based configuration UI
+make ssh-tunnel     # SSH tunneling utility
+make installer      # Installation tooling
 
 # Run tests (uses Dagger for containerized testing)
 make test

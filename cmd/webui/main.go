@@ -9,6 +9,7 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -81,6 +82,15 @@ type SessionData struct {
 	UserInfo   map[string]interface{}
 	Tokens     *oauth2.Token
 	ConfigData InterLinkConfig
+}
+
+type MonitorResult struct {
+	URL        string    `json:"url"`
+	Status     string    `json:"status"`
+	StatusCode int       `json:"status_code"`
+	Message    string    `json:"message"`
+	Timestamp  time.Time `json:"timestamp"`
+	Duration   string    `json:"duration"`
 }
 
 var (
@@ -319,6 +329,8 @@ func main() {
 	r.HandleFunc("/generate/script", generateScriptHandler).Methods("GET")
 	r.HandleFunc("/view/helm", viewHelmHandler).Methods("GET")
 	r.HandleFunc("/view/script", viewScriptHandler).Methods("GET")
+	r.HandleFunc("/monitor", monitorHandler).Methods("GET", "POST")
+	r.HandleFunc("/pingLink", pingLinkHandler).Methods("POST")
 
 	// Test mode routes
 	if config.TestMode {
@@ -753,6 +765,130 @@ func getUserInfo(token *oauth2.Token) (map[string]interface{}, error) {
 	}
 
 	return userInfo, nil
+}
+
+func monitorHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID, err := r.Cookie("session_id")
+	if err != nil || sessions[sessionID.Value] == nil {
+		http.Redirect(w, r, "/auth/login", http.StatusTemporaryRedirect)
+		return
+	}
+
+	session := sessions[sessionID.Value]
+	templateData := map[string]interface{}{
+		"UserInfo":   session.UserInfo,
+		"ConfigData": session.ConfigData,
+		"Tokens":     session.Tokens,
+		"TestMode":   config.TestMode,
+	}
+
+	renderTemplate(w, "monitor", templateData)
+}
+
+func pingLinkHandler(w http.ResponseWriter, r *http.Request) {
+	sessionID, err := r.Cookie("session_id")
+	if err != nil || sessions[sessionID.Value] == nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	session := sessions[sessionID.Value]
+
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	endpointURL := r.FormValue("endpoint_url")
+	if endpointURL == "" {
+		http.Error(w, "endpoint_url is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get auth token - prefer manual input, fallback to session token
+	authToken := r.FormValue("auth_token")
+	if authToken == "" && session.Tokens != nil && session.Tokens.AccessToken != "" {
+		authToken = session.Tokens.AccessToken
+	}
+
+	// Validate URL format
+	parsedURL, err := url.Parse(endpointURL)
+	if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+		http.Error(w, "Invalid URL format", http.StatusBadRequest)
+		return
+	}
+
+	// Ensure the URL ends with /pinglink if not already specified
+	if !strings.HasSuffix(parsedURL.Path, "/pinglink") {
+		if parsedURL.Path == "" || parsedURL.Path == "/" {
+			parsedURL.Path = "/pinglink"
+		} else {
+			parsedURL.Path = strings.TrimSuffix(parsedURL.Path, "/") + "/pinglink"
+		}
+		endpointURL = parsedURL.String()
+	}
+
+	result := pingInterLinkEndpoint(endpointURL, authToken)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(result); err != nil {
+		log.Printf("Failed to encode ping result: %v", err)
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+	}
+}
+
+func pingInterLinkEndpoint(endpointURL string, authToken string) MonitorResult {
+	start := time.Now()
+
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	req, err := http.NewRequest("POST", endpointURL, nil)
+	if err != nil {
+		return MonitorResult{
+			URL:        endpointURL,
+			Timestamp:  time.Now(),
+			Duration:   time.Since(start).String(),
+			Status:     "error",
+			StatusCode: 0,
+			Message:    fmt.Sprintf("Failed to create request: %v", err),
+		}
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	if authToken != "" {
+		req.Header.Set("Authorization", "Bearer "+authToken)
+	}
+
+	resp, err := client.Do(req)
+	duration := time.Since(start)
+
+	result := MonitorResult{
+		URL:       endpointURL,
+		Timestamp: time.Now(),
+		Duration:  duration.String(),
+	}
+
+	if err != nil {
+		result.Status = "error"
+		result.StatusCode = 0
+		result.Message = fmt.Sprintf("Failed to connect: %v", err)
+		return result
+	}
+	defer resp.Body.Close()
+
+	result.StatusCode = resp.StatusCode
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		result.Status = "success"
+		result.Message = "interLink endpoint is responding"
+	} else {
+		result.Status = "warning"
+		result.Message = fmt.Sprintf("HTTP %d: Endpoint responded but with error status", resp.StatusCode)
+	}
+
+	return result
 }
 
 func renderTemplate(w http.ResponseWriter, templateName string, data interface{}) {
@@ -1220,6 +1356,14 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
         <div class="actions">
             <a href="/generate/script" class="btn btn-success" download="interlink-install.sh">📥 Download interlink-install.sh</a>
             <a href="/view/script" class="btn btn-secondary">👁️ View & Copy</a>
+        </div>
+    </div>
+    
+    <div class="card">
+        <h2>🔍 Monitor Deployment</h2>
+        <p>After deploying interLink, monitor your endpoints to verify everything is running correctly and troubleshoot any connectivity issues.</p>
+        <div class="actions">
+            <a href="/monitor" class="btn">📊 Monitor interLink Endpoints</a>
         </div>
     </div>
     
@@ -1842,6 +1986,418 @@ func renderTemplate(w http.ResponseWriter, templateName string, data interface{}
                 }, 2000);
             });
         }
+    </script>
+</body>
+</html>`,
+		"monitor": `<!DOCTYPE html>
+<html>
+<head>
+    <title>interLink Monitor - WebUI</title>
+    <script src="https://unpkg.com/htmx.org@1.9.10"></script>
+    <style>
+        :root {
+            --primary-color: #ff6600;
+            --primary-dark: #cc5200;
+            --secondary-color: #2c3e50;
+            --background: #f8f9fa;
+            --surface: #ffffff;
+            --text-primary: #2c3e50;
+            --text-secondary: #6c757d;
+            --border: #dee2e6;
+            --success: #28a745;
+            --warning: #ffc107;
+            --danger: #dc3545;
+            --info: #17a2b8;
+        }
+        
+        * { box-sizing: border-box; }
+        
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            padding: 20px; 
+            background: linear-gradient(135deg, var(--background) 0%, #e9ecef 100%);
+            min-height: 100vh;
+            color: var(--text-primary);
+        }
+        
+        .header { 
+            display: flex; 
+            justify-content: space-between; 
+            align-items: center; 
+            margin-bottom: 30px; 
+            background: var(--surface);
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header-logo {
+            display: flex;
+            align-items: center;
+        }
+        
+        .header-logo img {
+            height: 40px;
+            width: auto;
+            max-width: 80px;
+            margin-right: 12px;
+            object-fit: contain;
+        }
+        
+        .header-logo h1 {
+            color: var(--secondary-color);
+            font-size: 1.8rem;
+            margin: 0;
+            font-weight: 300;
+        }
+        
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        
+        .test-mode-badge {
+            background: linear-gradient(45deg, var(--warning), #ffeaa7);
+            color: var(--secondary-color);
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            border: 1px solid var(--warning);
+        }
+        
+        .btn { 
+            background: var(--primary-color); 
+            color: white; 
+            padding: 12px 20px; 
+            text-decoration: none; 
+            border-radius: 8px; 
+            border: none; 
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .btn:hover { 
+            background: var(--primary-dark); 
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(255, 102, 0, 0.3);
+        }
+        
+        .btn-secondary { 
+            background: var(--secondary-color); 
+        }
+        
+        .btn-secondary:hover { 
+            background: #34495e; 
+            box-shadow: 0 4px 8px rgba(44, 62, 80, 0.3);
+        }
+        
+        .card { 
+            background: var(--surface); 
+            border: 1px solid var(--border); 
+            border-radius: 12px; 
+            padding: 25px; 
+            margin-bottom: 25px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.08);
+        }
+        
+        .card h2 {
+            color: var(--secondary-color);
+            margin-top: 0;
+            margin-bottom: 12px;
+            font-size: 1.4rem;
+            font-weight: 600;
+        }
+        
+        .form-group { 
+            margin-bottom: 20px; 
+        }
+        
+        .form-group label { 
+            display: block; 
+            margin-bottom: 8px; 
+            font-weight: 600; 
+            color: var(--secondary-color);
+            font-size: 0.95rem;
+        }
+        
+        .form-group input { 
+            width: 100%; 
+            padding: 12px; 
+            border: 2px solid var(--border); 
+            border-radius: 8px; 
+            font-size: 0.95rem;
+            transition: border-color 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(255, 102, 0, 0.1);
+        }
+        
+        .field-help {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            margin-top: 5px;
+            line-height: 1.4;
+        }
+        
+        .field-help code {
+            background: #f8f9fa;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: 'Courier New', monospace;
+            color: var(--secondary-color);
+        }
+        
+        .ping-form {
+            display: flex;
+            gap: 10px;
+            align-items: end;
+        }
+        
+        .ping-form .form-group {
+            flex: 1;
+            margin-bottom: 0;
+        }
+        
+        .result-container {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            display: none;
+        }
+        
+        .result-success {
+            background: linear-gradient(135deg, #d4edda, #c3e6cb);
+            border: 1px solid var(--success);
+            color: #155724;
+        }
+        
+        .result-warning {
+            background: linear-gradient(135deg, #fff3cd, #ffeaa7);
+            border: 1px solid var(--warning);
+            color: #856404;
+        }
+        
+        .result-error {
+            background: linear-gradient(135deg, #f8d7da, #f5c6cb);
+            border: 1px solid var(--danger);
+            color: #721c24;
+        }
+        
+        .result-item {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        
+        .result-item:last-child {
+            margin-bottom: 0;
+        }
+        
+        .result-label {
+            font-weight: 600;
+        }
+        
+        .spinner {
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid var(--primary-color);
+            border-radius: 50%;
+            width: 20px;
+            height: 20px;
+            animation: spin 1s linear infinite;
+            display: none;
+            margin-left: 10px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .usage-info {
+            background: linear-gradient(135deg, #e3f2fd 0%, #f3e5f5 100%);
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            border-left: 4px solid var(--info);
+        }
+        
+        .usage-info h3 {
+            color: var(--secondary-color);
+            margin-top: 0;
+            margin-bottom: 15px;
+        }
+        
+        .usage-info p {
+            margin: 10px 0;
+            color: var(--text-secondary);
+        }
+        
+        .example-urls {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+        }
+        
+        .example-urls code {
+            display: block;
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 8px 12px;
+            border-radius: 4px;
+            margin: 5px 0;
+            font-family: 'Courier New', monospace;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-logo">
+            <img src="/static/img/interlink_logo.png" alt="interLink Logo" onerror="this.src='data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAiIGhlaWdodD0iNDAiIHZpZXdCb3g9IjAgMCA0MCA0MCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48Y2lyY2xlIGN4PSIyMCIgY3k9IjIwIiByPSIyMCIgZmlsbD0iI2ZmNjYwMCIvPjx0ZXh0IHg9IjIwIiB5PSIyNSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0id2hpdGUiIGZvbnQtZmFtaWx5PSJBcmlhbCIgZm9udC1zaXplPSIxNiIgZm9udC13ZWlnaHQ9ImJvbGQiPmlMPC90ZXh0Pjwvc3ZnPg=='; this.style.width='40px'; this.style.height='40px';">
+            <h1>Monitor interLink</h1>
+        </div>
+        <div class="header-actions">
+            {{if .TestMode}}<span class="test-mode-badge">🧪 Test Mode</span>{{end}}
+            <a href="/" class="btn btn-secondary">Back to Dashboard</a>
+            <a href="/auth/logout" class="btn btn-secondary">Logout</a>
+        </div>
+    </div>
+    
+    <div class="usage-info">
+        <h3>🔍 Endpoint Monitoring</h3>
+        <p>Monitor your deployed interLink API endpoints to verify they are running correctly. This tool will ping the <code>/pinglink</code> endpoint and show you the response status.</p>
+        
+        <div class="example-urls">
+            <strong>Example URLs:</strong>
+            <code>https://your-interlink-server.com:8080</code>
+            <code>http://192.168.1.100:8080</code>
+            <code>https://interlink.example.com/api</code>
+        </div>
+        
+        <p><strong>Note:</strong> The URL will automatically append <code>/pinglink</code> if not already present.</p>
+    </div>
+    
+    <div class="card">
+        <h2>🔗 Test interLink Endpoint</h2>
+        <p>Enter the base URL of your interLink API server to test connectivity and verify it's responding correctly.</p>
+        
+        <form id="pingForm" hx-post="/pingLink" hx-target="#result" hx-indicator="#spinner">
+            <div class="ping-form">
+                <div class="form-group">
+                    <label for="endpoint_url">interLink API Endpoint URL:</label>
+                    <input type="url" id="endpoint_url" name="endpoint_url" 
+                           placeholder="https://your-interlink-server.com:8080" 
+                           value="{{if .ConfigData.InterLinkIP}}{{if eq .ConfigData.InterLinkPort 0}}https://{{.ConfigData.InterLinkIP}}{{else}}https://{{.ConfigData.InterLinkIP}}:{{.ConfigData.InterLinkPort}}{{end}}{{end}}"
+                           required>
+                    <div class="field-help">
+                        Full URL to your interLink API server including protocol and port.
+                        <br><strong>Will test:</strong> <code id="ping-url-preview">URL/pinglink</code>
+                    </div>
+                </div>
+                
+                <div class="form-group">
+                    <label for="auth_token">OIDC Bearer Token (Optional):</label>
+                    <input type="password" id="auth_token" name="auth_token" 
+                           placeholder="Leave empty to use session token if available">
+                    <div class="field-help">
+                        Bearer token for authorization. If empty, will try to use your current session token.
+                        {{if .Tokens}}
+                        <br><span style="color: var(--success);">✅ Session token available</span>
+                        {{else}}
+                        <br><span style="color: var(--warning);">⚠️ No session token - manual token required</span>
+                        {{end}}
+                    </div>
+                </div>
+                <button type="submit" class="btn">
+                    🔍 Test Connection
+                    <div id="spinner" class="spinner"></div>
+                </button>
+            </div>
+        </form>
+        
+        <div id="result" class="result-container"></div>
+    </div>
+    
+    <div class="card">
+        <h2>📊 How to Use</h2>
+        <ol>
+            <li><strong>Deploy interLink:</strong> Use the configuration and generated files to deploy your interLink setup</li>
+            <li><strong>Get the URL:</strong> Note the IP address and port where your interLink API is running</li>
+            <li><strong>Test Connection:</strong> Enter the URL above and click "Test Connection"</li>
+            <li><strong>Verify Status:</strong> Check that you get a successful response</li>
+        </ol>
+        
+        <h3>Expected Responses</h3>
+        <ul>
+            <li><strong>✅ Success:</strong> HTTP 200 - interLink is running and responding correctly</li>
+            <li><strong>⚠️ Warning:</strong> HTTP 4xx/5xx - interLink is reachable but may have configuration issues</li>
+            <li><strong>❌ Error:</strong> Connection failed - Check network, firewall, or if interLink is running</li>
+        </ul>
+    </div>
+    
+    <script>
+        // Update ping URL preview
+        document.getElementById('endpoint_url').addEventListener('input', function() {
+            const url = this.value;
+            const preview = document.getElementById('ping-url-preview');
+            if (url) {
+                try {
+                    const parsedUrl = new URL(url);
+                    const pingUrl = parsedUrl.origin + parsedUrl.pathname.replace(/\/$/, '') + '/ping';
+                    preview.textContent = pingUrl;
+                } catch (e) {
+                    preview.textContent = url + '/ping';
+                }
+            } else {
+                preview.textContent = 'URL/ping';
+            }
+        });
+        
+        // Handle ping response
+        document.body.addEventListener('htmx:afterRequest', function(evt) {
+            if (evt.detail.elt.id === 'pingForm') {
+                const result = document.getElementById('result');
+                result.style.display = 'block';
+                
+                if (evt.detail.xhr.status === 200) {
+                    try {
+                        const data = JSON.parse(evt.detail.xhr.responseText);
+                        let className = 'result-' + data.status;
+                        let icon = data.status === 'success' ? '✅' : 
+                                  data.status === 'warning' ? '⚠️' : '❌';
+                        
+                        result.className = 'result-container ' + className;
+                        result.innerHTML = '<h3>' + icon + ' Ping Result</h3>' +
+                            '<div class="result-item"><span class="result-label">URL:</span><span>' + data.url + '</span></div>' +
+                            '<div class="result-item"><span class="result-label">Status:</span><span>' + data.status.toUpperCase() + '</span></div>' +
+                            '<div class="result-item"><span class="result-label">HTTP Code:</span><span>' + data.status_code + '</span></div>' +
+                            '<div class="result-item"><span class="result-label">Response Time:</span><span>' + data.duration + '</span></div>' +
+                            '<div class="result-item"><span class="result-label">Message:</span><span>' + data.message + '</span></div>' +
+                            '<div class="result-item"><span class="result-label">Timestamp:</span><span>' + new Date(data.timestamp).toLocaleString() + '</span></div>';
+                    } catch (e) {
+                        result.className = 'result-container result-error';
+                        result.innerHTML = '<h3>❌ Error</h3><p>Failed to parse response</p>';
+                    }
+                } else {
+                    result.className = 'result-container result-error';
+                    result.innerHTML = '<h3>❌ Request Failed</h3><p>' + evt.detail.xhr.responseText + '</p>';
+                }
+            }
+        });
+        
+        // Trigger initial URL preview update
+        document.getElementById('endpoint_url').dispatchEvent(new Event('input'));
     </script>
 </body>
 </html>`,

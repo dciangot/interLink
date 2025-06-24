@@ -1,0 +1,28 @@
+FROM golang:1.24 as build-stage
+
+WORKDIR /app
+
+COPY .. .
+
+ENV GOMODCACHE="/go/pkg/mod"
+
+ENV GOCACHE="/go/build-cache"
+
+RUN mkdir -p $GOMODCACHE && mkdir -p $GOCACHE
+
+RUN --mount=type=cache,target=/go/pkg/mod bash -c "time go mod tidy"
+RUN --mount=type=cache,target=/go/build-cache bash -c "time CGO_ENABLED=0 GOOS=linux go build -o bin/webui cmd/webui/main.go"
+
+# Deploy the application binary into a lean image
+FROM gcr.io/distroless/base-debian11:latest AS build-release-stage
+
+WORKDIR /
+
+COPY --from=build-stage /app/bin/webui /webui
+COPY --from=build-stage /app/cmd/webui/static/ /static/
+
+USER nonroot:nonroot
+
+EXPOSE 8080
+
+ENTRYPOINT ["/webui"]

@@ -1,0 +1,106 @@
+nodeName: {{.VKName}}
+
+interlink:
+{{- if eq .DeploymentMode "tunneled"}}
+  address: unix://{{.SSHTunnel.LocalSocket}}
+  port: ""
+{{- else}}
+  address: https://{{.InterLinkIP}}
+  port: {{.InterLinkPort}}
+{{- end}}
+  disableProjectedVolumes: {{.DisableProjected}}
+{{- if eq .AuthMode "mtls"}}
+  tls:
+    enabled: true
+    certFile: "/etc/interlink/certs/tls.crt"
+    keyFile: "/etc/interlink/certs/tls.key"
+    caCertFile: "/etc/interlink/certs/ca.crt"
+{{- end}}
+
+{{- if eq .DeploymentMode "tunneled"}}
+sshTunnel:
+  enabled: true
+  remoteHost: {{.SSHTunnel.RemoteHost}}
+  remoteUser: {{.SSHTunnel.RemoteUser}}
+  sshPort: {{.SSHTunnel.SSHPort}}
+  localSocket: {{.SSHTunnel.LocalSocket}}
+  pluginPort: {{.SSHTunnel.PluginPort}}
+  privateKeyPath: {{.SSHTunnel.PrivateKeyPath}}
+{{- if .SSHTunnel.HostKeyPath}}
+  hostKeyPath: {{.SSHTunnel.HostKeyPath}}
+{{- end}}
+{{- if .SSHTunnel.PrivateKeyB64}}
+  keys:
+    privateKey: {{.SSHTunnel.PrivateKeyB64}}
+    publicKey: {{.SSHTunnel.PublicKeyB64}}
+{{- end}}
+{{- else}}
+sshTunnel:
+  enabled: false
+{{- end}}
+
+plugin:
+  type: {{.Plugin}}
+{{- if eq .Plugin "docker"}}
+  sidecarURL: "http://localhost:4000"
+  image: "ghcr.io/interlink-project/plugin-docker:latest"
+{{- else if eq .Plugin "slurm"}}
+  sidecarURL: "http://localhost:4000"
+  image: "ghcr.io/interlink-project/plugin-slurm:latest"
+{{- else}}
+  sidecarURL: "http://localhost:4000"
+  image: "ghcr.io/interlink-project/plugin-docker:latest"
+{{- end}}
+
+virtualNode:
+  resources:
+    CPUs: {{.VKLimits.CPU}}
+    memGiB: {{.VKLimits.Memory}}
+    pods: {{.VKLimits.Pods}}
+  HTTPProxies:
+    HTTP: null
+    HTTPs: null
+  HTTP:
+{{- if eq .AuthMode "mtls"}}
+    insecure: false
+    CACert: "/etc/vk/certs/ca.crt"
+{{- else}}
+    CACert: {{ .CACert }}
+    insecure: {{.HTTPInsecure}}
+{{- end}}
+  kubeletHTTP:
+{{- if eq .AuthMode "mtls"}}
+    insecure: false
+{{- else}}
+    insecure: true
+{{- end}}
+{{- if .NodeLabels}}
+  nodeLabels:
+{{- range $key, $value := .NodeLabels}}
+    - "{{$key}}={{$value}}"
+{{- end}}
+{{- end}}
+{{- if .NodeTaints}}
+  nodeTaints:
+{{- range .NodeTaints}}
+    - key: "{{.Key}}"
+      value: "{{.Value}}"
+      effect: "{{.Effect}}"
+{{- end}}
+{{- end}}
+
+{{- if eq .AuthMode "oauth"}}
+OAUTH:
+  enabled: {{if .OAUTH.ClientID}}true{{else}}false{{end}}
+{{- if .OAUTH.ClientID}}
+  TokenURL: {{.OAUTH.TokenURL}}
+  ClientID: {{.OAUTH.ClientID}}
+  ClientSecret: {{.OAUTH.ClientSecret}}
+  RefreshToken: {{.OAUTH.RefreshToken}}
+  GrantType: {{.OAUTH.GrantType}}
+  Audience: {{.OAUTH.Audience}}
+{{- end}}
+{{- else}}
+OAUTH:
+  enabled: false
+{{- end}}

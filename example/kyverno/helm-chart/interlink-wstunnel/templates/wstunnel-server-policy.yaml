@@ -23,15 +23,15 @@ spec:
     preconditions:
       all:
       # Check if pod is scheduled to virtual-kubelet node
-      - key: "{{ `{{ request.object.spec.nodeSelector."kubernetes.io/hostname" || '' }}` }}"
+      - key: "request.object.spec.nodeSelector.\"kubernetes.io/hostname\" || ''"
         operator: Equals
         value: "{{ .Values.virtualKubelet.nodeName }}"
       # Check if pod has tolerations for interLink virtual nodes
-      - key: "{{ `{{ request.object.spec.tolerations[?key=='` }}{{ .Values.virtualKubelet.toleration.key }}{{ `'] | length(@) }}` }}"
+      - key: "request.object.spec.tolerations[?key=='{{ .Values.virtualKubelet.toleration.key }}'] | length(@)"
         operator: GreaterThan
         value: 0
       # Check if pod has exposed ports
-      - key: "{{ `{{ request.object.spec.containers[?ports] | length(@) }}` }}"
+      - key: "request.object.spec.containers[?ports] | length(@)"
         operator: GreaterThan
         value: 0
     generate:
@@ -68,19 +68,16 @@ spec:
             - server
             - --restrict-to
             - {{ .Values.wstunnel.server.restrictTo }}
-            - "{{ `{{ range request.object.spec.containers }}` }}{{ `{{ range .ports }}` }}--restrict-http-upgrade-path-prefix {{ `{{ .containerPort }}` }} {{ `{{ end }}` }}{{ `{{ end }}` }}"
+            - "--restrict-http-upgrade-path-prefix"
+            - "8080"
             - "ws://{{ .Values.wstunnel.server.bindAddress }}:{{ .Values.wstunnel.server.port }}"
             ports:
             - containerPort: {{ .Values.wstunnel.server.port }}
               name: wstunnel
               protocol: TCP
-            {{ `{{- range request.object.spec.containers }}` }}
-            {{ `{{- range .ports }}` }}
-            - containerPort: {{ `{{ .containerPort }}` }}
-              name: "port-{{ `{{ .containerPort }}` }}"
-              protocol: {{ `{{ .protocol | default("TCP") }}` }}
-            {{ `{{- end }}` }}
-            {{ `{{- end }}` }}
+            - containerPort: 8080
+              name: "port-8080"
+              protocol: TCP
             env:
             - name: RUST_LOG
               value: "{{ .Values.wstunnel.server.logLevel }}"

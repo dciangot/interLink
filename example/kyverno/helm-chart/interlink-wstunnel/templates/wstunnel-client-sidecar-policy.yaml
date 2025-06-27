@@ -23,15 +23,15 @@ spec:
     preconditions:
       all:
       # Check if pod is scheduled to virtual-kubelet node
-      - key: "{{ `{{ request.object.spec.nodeSelector."kubernetes.io/hostname" || '' }}` }}"
+      - key: "request.object.spec.nodeSelector.\"kubernetes.io/hostname\" || ''"
         operator: Equals
         value: "{{ .Values.virtualKubelet.nodeName }}"
       # Check if pod has tolerations for interLink virtual nodes
-      - key: "{{ `{{ request.object.spec.tolerations[?key=='` }}{{ .Values.virtualKubelet.toleration.key }}{{ `'] | length(@) }}` }}"
+      - key: "request.object.spec.tolerations[?key=='{{ .Values.virtualKubelet.toleration.key }}'] | length(@)"
         operator: GreaterThan
         value: 0
       # Check if pod has exposed ports
-      - key: "{{ `{{ request.object.spec.containers[?ports] | length(@) }}` }}"
+      - key: "request.object.spec.containers[?ports] | length(@)"
         operator: GreaterThan
         value: 0
     mutate:
@@ -41,18 +41,23 @@ spec:
           - name: {{ .Values.wstunnel.clientSidecar.name }}
             image: "{{ .Values.wstunnel.image.repository }}:{{ .Values.wstunnel.image.tag }}"
             imagePullPolicy: {{ .Values.wstunnel.image.pullPolicy }}
-            args:
-            - client
-            - --http-upgrade-path-prefix
-            - wstunnel
-            {{ `{{- range request.object.spec.containers }}` }}
-            {{ `{{- range .ports }}` }}
+            command: ["/wstunnel"]
+            args: 
+            - "client"
+            - "--http-upgrade-path-prefix"
+            - "wstunnel"
             - "-R"
-            - "{{ `{{ .containerPort }}` }}:{{ .Values.wstunnel.client.targetAddress }}:{{ `{{ .containerPort }}` }}"
-            {{ `{{- end }}` }}
-            {{ `{{- end }}` }}
-            - "ws://{{ .Values.wstunnel.serverPrefix }}-{{ `{{ request.object.metadata.name }}` }}.{{ `{{ request.object.metadata.namespace }}` }}.svc.cluster.local:{{ .Values.wstunnel.server.port }}"
+            - "8080:{{ .Values.wstunnel.client.targetAddress }}:8080"
+            - "ws://{{ .Values.wstunnel.serverPrefix }}-${POD_NAME}.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.wstunnel.server.port }}"
             env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             - name: RUST_LOG
               value: "{{ .Values.wstunnel.client.logLevel }}"
             resources:

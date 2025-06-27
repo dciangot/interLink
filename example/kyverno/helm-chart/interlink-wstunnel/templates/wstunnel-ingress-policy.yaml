@@ -24,15 +24,15 @@ spec:
     preconditions:
       all:
       # Check if pod is scheduled to virtual-kubelet node
-      - key: "{{ `{{ request.object.spec.nodeSelector."kubernetes.io/hostname" || '' }}` }}"
+      - key: "request.object.spec.nodeSelector.\"kubernetes.io/hostname\" || ''"
         operator: Equals
         value: "{{ .Values.virtualKubelet.nodeName }}"
       # Check if pod has tolerations for interLink virtual nodes
-      - key: "{{ `{{ request.object.spec.tolerations[?key=='` }}{{ .Values.virtualKubelet.toleration.key }}{{ `'] | length(@) }}` }}"
+      - key: "request.object.spec.tolerations[?key=='{{ .Values.virtualKubelet.toleration.key }}'] | length(@)"
         operator: GreaterThan
         value: 0
       # Check if pod has exposed ports
-      - key: "{{ `{{ request.object.spec.containers[?ports] | length(@) }}` }}"
+      - key: "request.object.spec.containers[?ports] | length(@)"
         operator: GreaterThan
         value: 0
     generate:
@@ -57,17 +57,13 @@ spec:
           - host: "{{ `{{ request.object.metadata.name }}` }}.{{ `{{ request.object.metadata.namespace }}` }}.{{ .Values.ingress.domain }}"
             http:
               paths:
-              {{ `{{- range request.object.spec.containers }}` }}
-              {{ `{{- range .ports }}` }}
-              - path: "/port-{{ `{{ .containerPort }}` }}"
+              - path: "/port-8080"
                 pathType: Prefix
                 backend:
                   service:
                     name: "{{ .Values.wstunnel.serverPrefix }}-{{ `{{ request.object.metadata.name }}` }}"
                     port:
-                      number: {{ `{{ .containerPort }}` }}
-              {{ `{{- end }}` }}
-              {{ `{{- end }}` }}
+                      number: 8080
               - path: "/wstunnel"
                 pathType: Prefix
                 backend:

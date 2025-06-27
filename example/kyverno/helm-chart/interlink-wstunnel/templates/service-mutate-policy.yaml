@@ -28,11 +28,11 @@ spec:
         operator: NotEquals
         value: {}
       # Exclude services already managed by kyverno-interlink
-      - key: "{{ `{{ request.object.metadata.labels."managed-by" || '' }}` }}"
+      - key: "{{ `{{ request.object.metadata.labels.\"managed-by\" || '' }}` }}"
         operator: NotEquals
         value: "{{ .Values.wstunnel.managedBy }}"
       # Exclude services already mutated
-      - key: "{{ `{{ request.object.metadata.labels."managed-by" || '' }}` }}"
+      - key: "{{ `{{ request.object.metadata.labels.\"managed-by\" || '' }}` }}"
         operator: NotEquals
         value: "{{ .Values.serviceMutation.mutatedLabel }}"
     context:
@@ -42,7 +42,7 @@ spec:
         jmesPath: "items[?spec.nodeSelector.\"kubernetes.io/hostname\" == '{{ .Values.virtualKubelet.nodeName }}' && spec.tolerations[?key=='{{ .Values.virtualKubelet.toleration.key }}']]"
     - name: matchingPod
       variable:
-        value: "{{ `{{ targetPods[?metadata.labels.` }}{{ .Values.serviceMutation.matchLabel }}{{ ` == '` }}{{ `{{ request.object.spec.selector.` }}{{ .Values.serviceMutation.matchLabel }}{{ ` }}` }}{{ `' || metadata.name == '` }}{{ `{{ request.object.spec.selector.name }}` }}{{ `'] | [0] }}` }}"
+        value: "{{ `{{ targetPods[?metadata.labels.app == '{{ request.object.spec.selector.app }}' || metadata.name == '{{ request.object.spec.selector.name }}'] | [0] }}` }}"
     mutate:
       patchStrategicMerge:
         spec:

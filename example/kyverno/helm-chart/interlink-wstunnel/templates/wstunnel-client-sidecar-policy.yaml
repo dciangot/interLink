@@ -47,7 +47,7 @@ spec:
             - "--http-upgrade-path-prefix"
             - "wstunnel"
             - "-R"
-            - "8080:{{ .Values.wstunnel.client.targetAddress }}:8080"
+            - "{{ .Values.wstunnel.server.port }}:{{ .Values.wstunnel.client.targetAddress }}:{{ .Values.wstunnel.server.port }}"
             - "ws://{{ .Values.wstunnel.serverPrefix }}-${POD_NAME}.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.wstunnel.server.port }}"
             env:
             - name: POD_NAME

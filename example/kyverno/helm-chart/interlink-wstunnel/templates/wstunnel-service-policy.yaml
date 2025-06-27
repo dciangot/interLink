@@ -56,7 +56,7 @@ spec:
             port: {{ .Values.wstunnel.server.port }}
             targetPort: {{ .Values.wstunnel.server.port }}
             protocol: TCP
-          - name: "port-8080"
-            port: 8080
-            targetPort: 8080
+          - name: "port-{{ .Values.wstunnel.server.port }}"
+            port: {{ .Values.wstunnel.server.port }}
+            targetPort: {{ .Values.wstunnel.server.port }}
             protocol: TCP

@@ -57,13 +57,13 @@ spec:
           - host: "{{ `{{ request.object.metadata.name }}` }}.{{ `{{ request.object.metadata.namespace }}` }}.{{ .Values.ingress.domain }}"
             http:
               paths:
-              - path: "/port-8080"
+              - path: "/port-{{ .Values.wstunnel.server.port }}"
                 pathType: Prefix
                 backend:
                   service:
                     name: "{{ .Values.wstunnel.serverPrefix }}-{{ `{{ request.object.metadata.name }}` }}"
                     port:
-                      number: 8080
+                      number: {{ .Values.wstunnel.server.port }}
               - path: "/wstunnel"
                 pathType: Prefix
                 backend:

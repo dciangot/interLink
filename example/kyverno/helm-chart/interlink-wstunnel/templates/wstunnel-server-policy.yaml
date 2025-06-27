@@ -69,14 +69,14 @@ spec:
             - --restrict-to
             - {{ .Values.wstunnel.server.restrictTo }}
             - "--restrict-http-upgrade-path-prefix"
-            - "8080"
+            - "{{ .Values.wstunnel.server.port }}"
             - "ws://{{ .Values.wstunnel.server.bindAddress }}:{{ .Values.wstunnel.server.port }}"
             ports:
             - containerPort: {{ .Values.wstunnel.server.port }}
               name: wstunnel
               protocol: TCP
-            - containerPort: 8080
-              name: "port-8080"
+            - containerPort: {{ .Values.wstunnel.server.port }}
+              name: "port-{{ .Values.wstunnel.server.port }}"
               protocol: TCP
             env:
             - name: RUST_LOG

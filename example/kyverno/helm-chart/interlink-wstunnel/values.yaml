@@ -1,0 +1,97 @@
+# Default values for interlink-wstunnel.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+# Pre-installation checks
+preInstallChecks:
+  # Enable Kyverno installation validation
+  enabled: true
+  # Timeout for waiting for Kyverno to be ready (in seconds)
+  timeout: 120
+
+# Global policy settings
+policies:
+  admission: true
+  background: false
+
+# Virtual Kubelet configuration
+virtualKubelet:
+  nodeName: "virtual-kubelet"
+  toleration:
+    key: "virtual-node.interlink/no-schedule"
+
+# wstunnel configuration
+wstunnel:
+  # Container image settings
+  image:
+    repository: "erebe/wstunnel"
+    tag: "latest"
+    pullPolicy: "IfNotPresent"
+  
+  # Naming prefixes and labels
+  serverPrefix: "wstunnel-server"
+  ingressPrefix: "wstunnel"
+  managedBy: "kyverno-interlink"
+  
+  # Server pod labels
+  serverLabels:
+    app: "wstunnel-server"
+  
+  # Ingress labels
+  ingressLabels:
+    app: "wstunnel-ingress"
+  
+  # Server configuration
+  server:
+    port: 8080
+    bindAddress: "0.0.0.0"
+    restrictTo: "127.0.0.1"
+    logLevel: "info"
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+  
+  # Client configuration
+  client:
+    targetAddress: "127.0.0.1"
+    logLevel: "info"
+  
+  # Client sidecar configuration
+  clientSidecar:
+    name: "wstunnel-client"
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+  
+  # Service configuration
+  service:
+    type: "ClusterIP"
+
+# Ingress configuration
+ingress:
+  enabled: true
+  className: "nginx"
+  domain: "wstunnel.local"
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: "/"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+    nginx.ingress.kubernetes.io/websocket-services: "wstunnel-server-{{ .Values.wstunnel.serverPrefix }}"
+
+# Service mutation configuration
+serviceMutation:
+  enabled: true
+  matchLabel: "app"
+  mutatedLabel: "kyverno-interlink-mutated"
+
+# Chart naming overrides
+nameOverride: ""
+fullnameOverride: ""

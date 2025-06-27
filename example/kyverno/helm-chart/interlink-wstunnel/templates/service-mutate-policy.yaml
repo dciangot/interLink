@@ -1,0 +1,57 @@
+{{- if .Values.serviceMutation.enabled }}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ include "interlink-wstunnel.fullname" . }}-service-mutate
+  labels:
+    {{- include "interlink-wstunnel.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: "Mutate Services to Point to wstunnel Pods"
+    policies.kyverno.io/category: "interLink"
+    policies.kyverno.io/description: >-
+      This policy mutates user-created Services that target pods on virtual nodes 
+      to instead point to the corresponding wstunnel server pods running on cluster nodes.
+spec:
+  admission: {{ .Values.policies.admission }}
+  background: {{ .Values.policies.background }}
+  rules:
+  - name: mutate-service-to-wstunnel
+    match:
+      any:
+      - resources:
+          kinds:
+          - Service
+    preconditions:
+      all:
+      # Check if service has a selector that might target a virtual node pod
+      - key: "{{ `{{ request.object.spec.selector || {} }}` }}"
+        operator: NotEquals
+        value: {}
+      # Exclude services already managed by kyverno-interlink
+      - key: "{{ `{{ request.object.metadata.labels."managed-by" || '' }}` }}"
+        operator: NotEquals
+        value: "{{ .Values.wstunnel.managedBy }}"
+      # Exclude services already mutated
+      - key: "{{ `{{ request.object.metadata.labels."managed-by" || '' }}` }}"
+        operator: NotEquals
+        value: "{{ .Values.serviceMutation.mutatedLabel }}"
+    context:
+    - name: targetPods
+      apiCall:
+        urlPath: "/api/v1/namespaces/{{ `{{ request.object.metadata.namespace }}` }}/pods"
+        jmesPath: "items[?spec.nodeSelector.\"kubernetes.io/hostname\" == '{{ .Values.virtualKubelet.nodeName }}' && spec.tolerations[?key=='{{ .Values.virtualKubelet.toleration.key }}']]"
+    - name: matchingPod
+      variable:
+        value: "{{ `{{ targetPods[?metadata.labels.` }}{{ .Values.serviceMutation.matchLabel }}{{ ` == '` }}{{ `{{ request.object.spec.selector.` }}{{ .Values.serviceMutation.matchLabel }}{{ ` }}` }}{{ `' || metadata.name == '` }}{{ `{{ request.object.spec.selector.name }}` }}{{ `'] | [0] }}` }}"
+    mutate:
+      patchStrategicMerge:
+        spec:
+          +(selector):
+            app: {{ .Values.wstunnel.serverLabels.app }}
+            interlink.pod: "{{ `{{ matchingPod.metadata.name }}` }}"
+        metadata:
+          +(annotations):
+            interlink.original-selector: "{{ `{{ request.object.spec.selector | to_string(@) }}` }}"
+            interlink.target-pod: "{{ `{{ matchingPod.metadata.name }}` }}"
+            managed-by: {{ .Values.serviceMutation.mutatedLabel }}
+{{- end }}

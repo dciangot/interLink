@@ -1,0 +1,25 @@
+apiVersion: v2
+name: interlink-wstunnel
+description: A Helm chart for Kyverno policies that enable wstunnel support for interLink pods with exposed ports
+version: 0.1.0
+appVersion: "1.0.0"
+home: https://github.com/interTwin-eu/interLink
+sources:
+  - https://github.com/interTwin-eu/interLink
+maintainers:
+  - name: interLink Team
+    url: https://github.com/interTwin-eu/interLink
+keywords:
+  - interlink
+  - kyverno
+  - wstunnel
+  - kubernetes
+  - virtual-kubelet
+dependencies: []
+annotations:
+  category: Infrastructure
+  licenses: Apache-2.0
+  # Kyverno requirement information
+  kyverno.io/requires: ">=1.8.0"
+  # Installation order - this chart should be installed after Kyverno
+  helm.sh/resource-policy: keep

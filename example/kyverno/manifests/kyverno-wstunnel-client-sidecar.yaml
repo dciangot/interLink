@@ -1,0 +1,62 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: interlink-wstunnel-client-sidecar
+  annotations:
+    policies.kyverno.io/title: "Add wstunnel Client Sidecar to interLink Pods with Exposed Ports"
+    policies.kyverno.io/category: "interLink"
+    policies.kyverno.io/description: >-
+      This policy adds a wstunnel client sidecar container to pods scheduled 
+      on virtual nodes with interLink that have exposed ports.
+spec:
+  admission: true
+  background: false
+  rules:
+  - name: add-wstunnel-client-sidecar
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+    preconditions:
+      all:
+      # Check if pod is scheduled to virtual-kubelet node
+      - key: "{{ request.object.spec.nodeSelector.\"kubernetes.io/hostname\" || '' }}"
+        operator: Equals
+        value: "virtual-kubelet"
+      # Check if pod has tolerations for interLink virtual nodes
+      - key: "{{ request.object.spec.tolerations[?key=='virtual-node.interlink/no-schedule'] | length(@) }}"
+        operator: GreaterThan
+        value: 0
+      # Check if pod has exposed ports
+      - key: "{{ request.object.spec.containers[?ports] | length(@) }}"
+        operator: GreaterThan
+        value: 0
+    mutate:
+      patchStrategicMerge:
+        spec:
+          containers:
+          - name: wstunnel-client
+            image: erebe/wstunnel:latest
+            imagePullPolicy: IfNotPresent
+            args:
+            - client
+            - --http-upgrade-path-prefix
+            - wstunnel
+            {{- range request.object.spec.containers }}
+            {{- range .ports }}
+            - "-R"
+            - "{{ .containerPort }}:127.0.0.1:{{ .containerPort }}"
+            {{- end }}
+            {{- end }}
+            - "ws://wstunnel-server-{{ request.object.metadata.name }}.{{ request.object.metadata.namespace }}.svc.cluster.local:8080"
+            env:
+            - name: RUST_LOG
+              value: "info"
+            resources:
+              requests:
+                cpu: 25m
+                memory: 32Mi
+              limits:
+                cpu: 100m
+                memory: 128Mi

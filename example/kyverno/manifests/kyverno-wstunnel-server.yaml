@@ -1,0 +1,91 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: interlink-wstunnel-server-create
+  annotations:
+    policies.kyverno.io/title: "Create wstunnel Server Pod for interLink Pods with Exposed Ports"
+    policies.kyverno.io/category: "interLink"
+    policies.kyverno.io/description: >-
+      This policy creates a wstunnel server pod on the cluster for any pod 
+      scheduled to a virtual node with interLink that has exposed ports.
+spec:
+  admission: true
+  background: false
+  rules:
+  - name: create-wstunnel-server
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+    preconditions:
+      all:
+      # Check if pod is scheduled to virtual-kubelet node
+      - key: "{{ request.object.spec.nodeSelector.\"kubernetes.io/hostname\" || '' }}"
+        operator: Equals
+        value: "virtual-kubelet"
+      # Check if pod has tolerations for interLink virtual nodes
+      - key: "{{ request.object.spec.tolerations[?key=='virtual-node.interlink/no-schedule'] | length(@) }}"
+        operator: GreaterThan
+        value: 0
+      # Check if pod has exposed ports
+      - key: "{{ request.object.spec.containers[?ports] | length(@) }}"
+        operator: GreaterThan
+        value: 0
+    generate:
+      apiVersion: v1
+      kind: Pod
+      name: "wstunnel-server-{{ request.object.metadata.name }}"
+      namespace: "{{ request.object.metadata.namespace }}"
+      synchronize: true
+      data:
+        metadata:
+          labels:
+            app: wstunnel-server
+            interlink.pod: "{{ request.object.metadata.name }}"
+            managed-by: kyverno-interlink
+        spec:
+          restartPolicy: Always
+          # Run on cluster nodes, not virtual nodes
+          nodeSelector:
+            kubernetes.io/os: linux
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                    - virtual-kubelet
+          containers:
+          - name: wstunnel-server
+            image: erebe/wstunnel:latest
+            imagePullPolicy: IfNotPresent
+            args:
+            - server
+            - --restrict-to
+            - 127.0.0.1
+            - "{{ range request.object.spec.containers }}{{ range .ports }}--restrict-http-upgrade-path-prefix {{ .containerPort }} {{ end }}{{ end }}"
+            - "ws://0.0.0.0:8080"
+            ports:
+            - containerPort: 8080
+              name: wstunnel
+              protocol: TCP
+            {{- range request.object.spec.containers }}
+            {{- range .ports }}
+            - containerPort: {{ .containerPort }}
+              name: "port-{{ .containerPort }}"
+              protocol: {{ .protocol | default("TCP") }}
+            {{- end }}
+            {{- end }}
+            env:
+            - name: RUST_LOG
+              value: "info"
+            resources:
+              requests:
+                cpu: 50m
+                memory: 64Mi
+              limits:
+                cpu: 200m
+                memory: 256Mi

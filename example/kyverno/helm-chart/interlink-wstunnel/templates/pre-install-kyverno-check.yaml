@@ -1,0 +1,140 @@
+{{- if .Values.preInstallChecks.enabled }}
+apiVersion: v1
+kind: Job
+metadata:
+  name: {{ include "interlink-wstunnel.fullname" . }}-kyverno-check
+  labels:
+    {{- include "interlink-wstunnel.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  template:
+    metadata:
+      name: {{ include "interlink-wstunnel.fullname" . }}-kyverno-check
+      labels:
+        {{- include "interlink-wstunnel.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ include "interlink-wstunnel.fullname" . }}-kyverno-check
+      containers:
+      - name: kyverno-check
+        image: bitnami/kubectl:latest
+        imagePullPolicy: IfNotPresent
+        command:
+        - /bin/bash
+        - -c
+        - |
+          set -e
+          echo "🔍 Checking if Kyverno is installed..."
+          
+          # Check if Kyverno CRDs exist
+          if ! kubectl get crd clusterpolicies.kyverno.io >/dev/null 2>&1; then
+            echo "❌ ERROR: Kyverno CRDs not found. Please install Kyverno first."
+            echo "📖 Install Kyverno with:"
+            echo "   helm repo add kyverno https://kyverno.github.io/kyverno/"
+            echo "   helm repo update"
+            echo "   helm install kyverno kyverno/kyverno -n kyverno --create-namespace"
+            exit 1
+          fi
+          
+          # Check if Kyverno pods are running
+          if ! kubectl get pods -n kyverno -l app.kubernetes.io/name=kyverno >/dev/null 2>&1; then
+            echo "❌ ERROR: Kyverno pods not found in kyverno namespace."
+            echo "📖 Please ensure Kyverno is properly installed and running."
+            exit 1
+          fi
+          
+          # Check if Kyverno pods are ready
+          NOT_READY=$(kubectl get pods -n kyverno -l app.kubernetes.io/name=kyverno -o jsonpath='{.items[?(@.status.phase!="Running")].metadata.name}' | wc -w)
+          if [ "$NOT_READY" -gt 0 ]; then
+            echo "⏳ WARNING: Some Kyverno pods are not ready yet."
+            echo "📋 Current Kyverno pod status:"
+            kubectl get pods -n kyverno -l app.kubernetes.io/name=kyverno
+            echo "⏱️  Waiting for Kyverno pods to be ready..."
+            kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=kyverno -n kyverno --timeout={{ .Values.preInstallChecks.timeout }}s || {
+              echo "❌ ERROR: Kyverno pods failed to become ready within 2 minutes."
+              exit 1
+            }
+          fi
+          
+          # Check Kyverno version compatibility
+          KYVERNO_VERSION=$(kubectl get deployment -n kyverno kyverno-admission-controller -o jsonpath='{.spec.template.spec.containers[0].image}' | cut -d: -f2)
+          echo "📋 Found Kyverno version: $KYVERNO_VERSION"
+          
+          # Verify admission controller is responding
+          if kubectl get validatingadmissionpolicies.admissionregistration.k8s.io >/dev/null 2>&1; then
+            echo "✅ Kyverno admission controller is responding"
+          else
+            echo "❌ ERROR: Kyverno admission controller may not be properly configured"
+            exit 1
+          fi
+          
+          echo "✅ Kyverno is properly installed and ready!"
+          echo "🚀 Proceeding with interLink wstunnel policy installation..."
+        resources:
+          requests:
+            cpu: 10m
+            memory: 16Mi
+          limits:
+            cpu: 100m
+            memory: 64Mi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "interlink-wstunnel.fullname" . }}-kyverno-check
+  labels:
+    {{- include "interlink-wstunnel.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "interlink-wstunnel.fullname" . }}-kyverno-check
+  labels:
+    {{- include "interlink-wstunnel.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list"]
+- apiGroups: ["apiextensions.k8s.io"]
+  resources: ["customresourcedefinitions"]
+  verbs: ["get", "list"]
+- apiGroups: ["kyverno.io"]
+  resources: ["clusterpolicies", "policies"]
+  verbs: ["get", "list"]
+- apiGroups: ["admissionregistration.k8s.io"]
+  resources: ["validatingadmissionpolicies", "mutatingadmissionpolicies"]
+  verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "interlink-wstunnel.fullname" . }}-kyverno-check
+  labels:
+    {{- include "interlink-wstunnel.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-10"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "interlink-wstunnel.fullname" . }}-kyverno-check
+subjects:
+- kind: ServiceAccount
+  name: {{ include "interlink-wstunnel.fullname" . }}-kyverno-check
+  namespace: {{ .Release.Namespace }}
+{{- end }}

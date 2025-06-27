@@ -1,0 +1,88 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ include "interlink-wstunnel.fullname" . }}-server-create
+  labels:
+    {{- include "interlink-wstunnel.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: "Create wstunnel Server Pod for interLink Pods with Exposed Ports"
+    policies.kyverno.io/category: "interLink"
+    policies.kyverno.io/description: >-
+      This policy creates a wstunnel server pod on the cluster for any pod 
+      scheduled to a virtual node with interLink that has exposed ports.
+spec:
+  admission: {{ .Values.policies.admission }}
+  background: {{ .Values.policies.background }}
+  rules:
+  - name: create-wstunnel-server
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+    preconditions:
+      all:
+      # Check if pod is scheduled to virtual-kubelet node
+      - key: "{{ `{{ request.object.spec.nodeSelector."kubernetes.io/hostname" || '' }}` }}"
+        operator: Equals
+        value: "{{ .Values.virtualKubelet.nodeName }}"
+      # Check if pod has tolerations for interLink virtual nodes
+      - key: "{{ `{{ request.object.spec.tolerations[?key=='` }}{{ .Values.virtualKubelet.toleration.key }}{{ `'] | length(@) }}` }}"
+        operator: GreaterThan
+        value: 0
+      # Check if pod has exposed ports
+      - key: "{{ `{{ request.object.spec.containers[?ports] | length(@) }}` }}"
+        operator: GreaterThan
+        value: 0
+    generate:
+      apiVersion: v1
+      kind: Pod
+      name: "{{ .Values.wstunnel.serverPrefix }}-{{ `{{ request.object.metadata.name }}` }}"
+      namespace: "{{ `{{ request.object.metadata.namespace }}` }}"
+      synchronize: true
+      data:
+        metadata:
+          labels:
+            app: {{ .Values.wstunnel.serverLabels.app }}
+            interlink.pod: "{{ `{{ request.object.metadata.name }}` }}"
+            managed-by: {{ .Values.wstunnel.managedBy }}
+        spec:
+          restartPolicy: Always
+          # Run on cluster nodes, not virtual nodes
+          nodeSelector:
+            kubernetes.io/os: linux
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: NotIn
+                    values:
+                    - {{ .Values.virtualKubelet.nodeName }}
+          containers:
+          - name: wstunnel-server
+            image: "{{ .Values.wstunnel.image.repository }}:{{ .Values.wstunnel.image.tag }}"
+            imagePullPolicy: {{ .Values.wstunnel.image.pullPolicy }}
+            args:
+            - server
+            - --restrict-to
+            - {{ .Values.wstunnel.server.restrictTo }}
+            - "{{ `{{ range request.object.spec.containers }}` }}{{ `{{ range .ports }}` }}--restrict-http-upgrade-path-prefix {{ `{{ .containerPort }}` }} {{ `{{ end }}` }}{{ `{{ end }}` }}"
+            - "ws://{{ .Values.wstunnel.server.bindAddress }}:{{ .Values.wstunnel.server.port }}"
+            ports:
+            - containerPort: {{ .Values.wstunnel.server.port }}
+              name: wstunnel
+              protocol: TCP
+            {{ `{{- range request.object.spec.containers }}` }}
+            {{ `{{- range .ports }}` }}
+            - containerPort: {{ `{{ .containerPort }}` }}
+              name: "port-{{ `{{ .containerPort }}` }}"
+              protocol: {{ `{{ .protocol | default("TCP") }}` }}
+            {{ `{{- end }}` }}
+            {{ `{{- end }}` }}
+            env:
+            - name: RUST_LOG
+              value: "{{ .Values.wstunnel.server.logLevel }}"
+            resources:
+              {{- toYaml .Values.wstunnel.server.resources | nindent 14 }}

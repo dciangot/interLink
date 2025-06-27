@@ -1,0 +1,54 @@
+🚀 interLink wstunnel policies have been installed!
+
+{{- if .Values.preInstallChecks.enabled }}
+✅ Kyverno installation validation completed successfully.
+{{- else }}
+⚠️  Pre-installation checks were disabled. Ensure Kyverno is properly installed.
+{{- end }}
+
+📋 Installed Policies:
+- {{ include "interlink-wstunnel.fullname" . }}-server-create
+- {{ include "interlink-wstunnel.fullname" . }}-client-sidecar
+- {{ include "interlink-wstunnel.fullname" . }}-service-create
+{{- if .Values.ingress.enabled }}
+- {{ include "interlink-wstunnel.fullname" . }}-ingress-create
+{{- end }}
+{{- if .Values.serviceMutation.enabled }}
+- {{ include "interlink-wstunnel.fullname" . }}-service-mutate
+{{- end }}
+
+🎯 Target Configuration:
+- Virtual Node: {{ .Values.virtualKubelet.nodeName }}
+- Toleration Key: {{ .Values.virtualKubelet.toleration.key }}
+- wstunnel Image: {{ .Values.wstunnel.image.repository }}:{{ .Values.wstunnel.image.tag }}
+
+🔧 Features Enabled:
+{{- if .Values.ingress.enabled }}
+✅ Ingress creation ({{ .Values.ingress.className }})
+{{- else }}
+❌ Ingress creation disabled
+{{- end }}
+{{- if .Values.serviceMutation.enabled }}
+✅ Service mutation
+{{- else }}
+❌ Service mutation disabled
+{{- end }}
+
+📖 Next Steps:
+1. Deploy a pod with exposed ports to a virtual node:
+   kubectl apply -f example/kyverno/test_pod_with_ports.yaml
+
+2. Check generated resources:
+   kubectl get pods,services,ingress -l managed-by={{ .Values.wstunnel.managedBy }}
+
+3. Monitor policy compliance:
+   kubectl get clusterpolicies | grep {{ include "interlink-wstunnel.fullname" . }}
+
+🔍 Troubleshooting:
+- View policy status: kubectl describe clusterpolicy <policy-name>
+- Check admission controller logs: kubectl logs -n kyverno -l app.kubernetes.io/name=kyverno
+- Validate policy syntax: kubectl get clusterpolicy <policy-name> -o yaml
+
+📚 Documentation: See README.md for detailed usage instructions.
+
+Happy tunneling! 🌐

@@ -1,0 +1,59 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ include "interlink-wstunnel.fullname" . }}-client-sidecar
+  labels:
+    {{- include "interlink-wstunnel.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: "Add wstunnel Client Sidecar to interLink Pods with Exposed Ports"
+    policies.kyverno.io/category: "interLink"
+    policies.kyverno.io/description: >-
+      This policy adds a wstunnel client sidecar container to pods scheduled 
+      on virtual nodes with interLink that have exposed ports.
+spec:
+  admission: {{ .Values.policies.admission }}
+  background: {{ .Values.policies.background }}
+  rules:
+  - name: add-wstunnel-client-sidecar
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+    preconditions:
+      all:
+      # Check if pod is scheduled to virtual-kubelet node
+      - key: "{{ `{{ request.object.spec.nodeSelector."kubernetes.io/hostname" || '' }}` }}"
+        operator: Equals
+        value: "{{ .Values.virtualKubelet.nodeName }}"
+      # Check if pod has tolerations for interLink virtual nodes
+      - key: "{{ `{{ request.object.spec.tolerations[?key=='` }}{{ .Values.virtualKubelet.toleration.key }}{{ `'] | length(@) }}` }}"
+        operator: GreaterThan
+        value: 0
+      # Check if pod has exposed ports
+      - key: "{{ `{{ request.object.spec.containers[?ports] | length(@) }}` }}"
+        operator: GreaterThan
+        value: 0
+    mutate:
+      patchStrategicMerge:
+        spec:
+          containers:
+          - name: {{ .Values.wstunnel.clientSidecar.name }}
+            image: "{{ .Values.wstunnel.image.repository }}:{{ .Values.wstunnel.image.tag }}"
+            imagePullPolicy: {{ .Values.wstunnel.image.pullPolicy }}
+            args:
+            - client
+            - --http-upgrade-path-prefix
+            - wstunnel
+            {{ `{{- range request.object.spec.containers }}` }}
+            {{ `{{- range .ports }}` }}
+            - "-R"
+            - "{{ `{{ .containerPort }}` }}:{{ .Values.wstunnel.client.targetAddress }}:{{ `{{ .containerPort }}` }}"
+            {{ `{{- end }}` }}
+            {{ `{{- end }}` }}
+            - "ws://{{ .Values.wstunnel.serverPrefix }}-{{ `{{ request.object.metadata.name }}` }}.{{ `{{ request.object.metadata.namespace }}` }}.svc.cluster.local:{{ .Values.wstunnel.server.port }}"
+            env:
+            - name: RUST_LOG
+              value: "{{ .Values.wstunnel.client.logLevel }}"
+            resources:
+              {{- toYaml .Values.wstunnel.clientSidecar.resources | nindent 14 }}

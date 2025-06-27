@@ -1,0 +1,75 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: interlink-wstunnel-ingress-create
+  annotations:
+    policies.kyverno.io/title: "Create Ingress for wstunnel Server Pods"
+    policies.kyverno.io/category: "interLink"
+    policies.kyverno.io/description: >-
+      This policy creates an Ingress to expose the wstunnel server pod
+      externally for interLink pods with exposed ports.
+spec:
+  admission: true
+  background: false
+  rules:
+  - name: create-wstunnel-ingress
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+    preconditions:
+      all:
+      # Check if pod is scheduled to virtual-kubelet node
+      - key: "{{ request.object.spec.nodeSelector.\"kubernetes.io/hostname\" || '' }}"
+        operator: Equals
+        value: "virtual-kubelet"
+      # Check if pod has tolerations for interLink virtual nodes
+      - key: "{{ request.object.spec.tolerations[?key=='virtual-node.interlink/no-schedule'] | length(@) }}"
+        operator: GreaterThan
+        value: 0
+      # Check if pod has exposed ports
+      - key: "{{ request.object.spec.containers[?ports] | length(@) }}"
+        operator: GreaterThan
+        value: 0
+    generate:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      name: "wstunnel-{{ request.object.metadata.name }}"
+      namespace: "{{ request.object.metadata.namespace }}"
+      synchronize: true
+      data:
+        metadata:
+          labels:
+            app: wstunnel-ingress
+            interlink.pod: "{{ request.object.metadata.name }}"
+            managed-by: kyverno-interlink
+          annotations:
+            nginx.ingress.kubernetes.io/rewrite-target: /
+            nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+            nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+            nginx.ingress.kubernetes.io/websocket-services: "wstunnel-server-{{ request.object.metadata.name }}"
+        spec:
+          ingressClassName: nginx
+          rules:
+          - host: "{{ request.object.metadata.name }}.{{ request.object.metadata.namespace }}.wstunnel.local"
+            http:
+              paths:
+              {{- range request.object.spec.containers }}
+              {{- range .ports }}
+              - path: "/port-{{ .containerPort }}"
+                pathType: Prefix
+                backend:
+                  service:
+                    name: "wstunnel-server-{{ request.object.metadata.name }}"
+                    port:
+                      number: {{ .containerPort }}
+              {{- end }}
+              {{- end }}
+              - path: "/wstunnel"
+                pathType: Prefix
+                backend:
+                  service:
+                    name: "wstunnel-server-{{ request.object.metadata.name }}"
+                    port:
+                      number: 8080

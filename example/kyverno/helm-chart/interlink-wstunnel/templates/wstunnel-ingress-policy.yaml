@@ -1,0 +1,78 @@
+{{- if .Values.ingress.enabled }}
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: {{ include "interlink-wstunnel.fullname" . }}-ingress-create
+  labels:
+    {{- include "interlink-wstunnel.labels" . | nindent 4 }}
+  annotations:
+    policies.kyverno.io/title: "Create Ingress for wstunnel Server Pods"
+    policies.kyverno.io/category: "interLink"
+    policies.kyverno.io/description: >-
+      This policy creates an Ingress to expose the wstunnel server pod
+      externally for interLink pods with exposed ports.
+spec:
+  admission: {{ .Values.policies.admission }}
+  background: {{ .Values.policies.background }}
+  rules:
+  - name: create-wstunnel-ingress
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+    preconditions:
+      all:
+      # Check if pod is scheduled to virtual-kubelet node
+      - key: "{{ `{{ request.object.spec.nodeSelector."kubernetes.io/hostname" || '' }}` }}"
+        operator: Equals
+        value: "{{ .Values.virtualKubelet.nodeName }}"
+      # Check if pod has tolerations for interLink virtual nodes
+      - key: "{{ `{{ request.object.spec.tolerations[?key=='` }}{{ .Values.virtualKubelet.toleration.key }}{{ `'] | length(@) }}` }}"
+        operator: GreaterThan
+        value: 0
+      # Check if pod has exposed ports
+      - key: "{{ `{{ request.object.spec.containers[?ports] | length(@) }}` }}"
+        operator: GreaterThan
+        value: 0
+    generate:
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      name: "{{ .Values.wstunnel.ingressPrefix }}-{{ `{{ request.object.metadata.name }}` }}"
+      namespace: "{{ `{{ request.object.metadata.namespace }}` }}"
+      synchronize: true
+      data:
+        metadata:
+          labels:
+            app: {{ .Values.wstunnel.ingressLabels.app }}
+            interlink.pod: "{{ `{{ request.object.metadata.name }}` }}"
+            managed-by: {{ .Values.wstunnel.managedBy }}
+          annotations:
+            {{- toYaml .Values.ingress.annotations | nindent 12 }}
+        spec:
+          {{- if .Values.ingress.className }}
+          ingressClassName: {{ .Values.ingress.className }}
+          {{- end }}
+          rules:
+          - host: "{{ `{{ request.object.metadata.name }}` }}.{{ `{{ request.object.metadata.namespace }}` }}.{{ .Values.ingress.domain }}"
+            http:
+              paths:
+              {{ `{{- range request.object.spec.containers }}` }}
+              {{ `{{- range .ports }}` }}
+              - path: "/port-{{ `{{ .containerPort }}` }}"
+                pathType: Prefix
+                backend:
+                  service:
+                    name: "{{ .Values.wstunnel.serverPrefix }}-{{ `{{ request.object.metadata.name }}` }}"
+                    port:
+                      number: {{ `{{ .containerPort }}` }}
+              {{ `{{- end }}` }}
+              {{ `{{- end }}` }}
+              - path: "/wstunnel"
+                pathType: Prefix
+                backend:
+                  service:
+                    name: "{{ .Values.wstunnel.serverPrefix }}-{{ `{{ request.object.metadata.name }}` }}"
+                    port:
+                      number: {{ .Values.wstunnel.server.port }}
+{{- end }}

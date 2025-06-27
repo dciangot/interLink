@@ -1,0 +1,64 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: interlink-wstunnel-service-create
+  annotations:
+    policies.kyverno.io/title: "Create Service for wstunnel Server Pods"
+    policies.kyverno.io/category: "interLink"
+    policies.kyverno.io/description: >-
+      This policy creates a Service to expose the wstunnel server pod
+      for interLink pods with exposed ports.
+spec:
+  admission: true
+  background: false
+  rules:
+  - name: create-wstunnel-service
+    match:
+      any:
+      - resources:
+          kinds:
+          - Pod
+    preconditions:
+      all:
+      # Check if pod is scheduled to virtual-kubelet node
+      - key: "{{ request.object.spec.nodeSelector.\"kubernetes.io/hostname\" || '' }}"
+        operator: Equals
+        value: "virtual-kubelet"
+      # Check if pod has tolerations for interLink virtual nodes
+      - key: "{{ request.object.spec.tolerations[?key=='virtual-node.interlink/no-schedule'] | length(@) }}"
+        operator: GreaterThan
+        value: 0
+      # Check if pod has exposed ports
+      - key: "{{ request.object.spec.containers[?ports] | length(@) }}"
+        operator: GreaterThan
+        value: 0
+    generate:
+      apiVersion: v1
+      kind: Service
+      name: "wstunnel-server-{{ request.object.metadata.name }}"
+      namespace: "{{ request.object.metadata.namespace }}"
+      synchronize: true
+      data:
+        metadata:
+          labels:
+            app: wstunnel-server
+            interlink.pod: "{{ request.object.metadata.name }}"
+            managed-by: kyverno-interlink
+        spec:
+          type: ClusterIP
+          selector:
+            app: wstunnel-server
+            interlink.pod: "{{ request.object.metadata.name }}"
+          ports:
+          - name: wstunnel
+            port: 8080
+            targetPort: 8080
+            protocol: TCP
+          {{- range request.object.spec.containers }}
+          {{- range .ports }}
+          - name: "port-{{ .containerPort }}"
+            port: {{ .containerPort }}
+            targetPort: {{ .containerPort }}
+            protocol: {{ .protocol | default("TCP") }}
+          {{- end }}
+          {{- end }}

@@ -1,0 +1,38 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: interlink-test-with-ports
+  namespace: default
+spec:
+  nodeSelector:
+    kubernetes.io/hostname: virtual-kubelet
+  automountServiceAccountToken: false
+  containers:
+  - name: nginx-container
+    image: "docker://nginx:alpine"
+    imagePullPolicy: Always
+    ports:
+    - containerPort: 80
+      name: http
+      protocol: TCP
+    - containerPort: 443
+      name: https
+      protocol: TCP
+    resources:
+      limits:
+        cpu: "0.5"
+        memory: 512Mi
+      requests:
+        cpu: "0.5"
+        memory: 512Mi
+  tolerations:
+  - key: virtual-node.interlink/no-schedule
+    operator: Exists
+  - effect: NoExecute
+    key: node.kubernetes.io/not-ready
+    operator: Exists
+    tolerationSeconds: 300
+  - effect: NoExecute
+    key: node.kubernetes.io/unreachable
+    operator: Exists
+    tolerationSeconds: 300

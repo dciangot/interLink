@@ -134,6 +134,7 @@ type Provider struct {
 	onNodeChangeCallback func(*v1.Node)
 	clientSet            *kubernetes.Clientset
 	clientHTTPTransport  *http.Transport
+	interlink            *InterlinkClient
 	podIPs               *podIPTracker
 }
 
@@ -497,6 +498,11 @@ func NewProviderConfig(
 		},
 	}
 
+	interlinkClient, err := NewInterlinkClient(context.Background(), config, clientHTTPTransport)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create the interLink client: %w", err)
+	}
+
 	provider := Provider{
 		nodeName:            nodeName,
 		node:                &node,
@@ -508,6 +514,7 @@ func NewProviderConfig(
 		config:              config,
 		startTime:           time.Now(),
 		clientHTTPTransport: clientHTTPTransport,
+		interlink:           interlinkClient,
 	}
 
 	return &provider, nil
@@ -620,7 +627,7 @@ func (p *Provider) nodeUpdate(ctx context.Context) {
 			return
 		case <-t.C:
 		}
-		_, code, respBody, err := PingInterLink(ctx, p.config)
+		code, respBody, err := p.interlink.Ping(ctx)
 		if err != nil || code != 200 {
 			// Use custom condition with InterLink status information
 			errorMsg := fmt.Sprintf("Ping failed with code %d", code)

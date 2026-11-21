@@ -527,3 +527,23 @@ func TestInterlinkClient_Logs(t *testing.T) {
 type roundTripperFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestNewProviderConfig_BuildsInterlinkClient(t *testing.T) {
+	t.Run("wires the client into the provider", func(t *testing.T) {
+		provider, err := NewProviderConfig(
+			Config{InterlinkURL: "http://interlink.example.com", InterlinkPort: "3000"},
+			"node", "v1", "linux", "10.0.0.1", 10250, &http.Transport{},
+		)
+		require.NoError(t, err)
+		require.NotNil(t, provider.interlink)
+		assert.Equal(t, "http://interlink.example.com:3000", provider.interlink.endpoint)
+	})
+
+	t.Run("fails on an invalid interLink endpoint", func(t *testing.T) {
+		_, err := NewProviderConfig(
+			Config{InterlinkURL: "ftp://example.com"},
+			"node", "v1", "linux", "10.0.0.1", 10250, &http.Transport{},
+		)
+		assert.ErrorContains(t, err, "interLink client")
+	})
+}

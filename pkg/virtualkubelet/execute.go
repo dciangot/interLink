@@ -1,16 +1,13 @@
 package virtualkubelet
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"regexp"
 	"strconv"
@@ -22,29 +19,10 @@ import (
 	k8sTypes "k8s.io/apimachinery/pkg/types"
 
 	"github.com/containerd/containerd/log"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
-	trace "go.opentelemetry.io/otel/trace"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
-
-// isSafeURL checks for SSRF by allowing only http(s) URLs and blocking localhost/internal addresses.
-func isSafeURL(rawurl string) bool {
-	u, err := url.Parse(rawurl)
-	if err != nil {
-		return false
-	}
-	if u.Scheme != "http" && u.Scheme != "https" {
-		return false
-	}
-	host := u.Hostname()
-	if host == "localhost" || host == "127.0.0.1" || host == "::1" || strings.HasSuffix(host, ".internal") {
-		return false
-	}
-	return true
-}
 
 const (
 	PodPhaseInitialize = "Initializing"
@@ -237,112 +215,6 @@ func createTLSHTTPClient(ctx context.Context, tlsConfig TLSConfig) (*http.Client
 	}
 
 	return &http.Client{Transport: transport}, nil
-}
-
-func doRequestWithClient(req *http.Request, token string, httpClient *http.Client) (*http.Response, error) {
-	if token != "" {
-		req.Header.Add("Authorization", "Bearer "+token)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if !isSafeURL(req.URL.String()) {
-		return nil, fmt.Errorf("potential SSRF detected: %s", req.URL.String())
-	}
-	return httpClient.Do(req) // #nosec G704
-}
-
-func getSidecarEndpoint(ctx context.Context, interLinkURL string, interLinkPort string) string {
-	interLinkEndpoint := ""
-	log.G(ctx).Info("InterlingURL: ", interLinkURL)
-	switch {
-	case strings.HasPrefix(interLinkURL, "unix://"):
-		interLinkEndpoint = "http://unix"
-	case strings.HasPrefix(interLinkURL, "http://"):
-		interLinkEndpoint = interLinkURL + ":" + interLinkPort
-	case strings.HasPrefix(interLinkURL, "https://"):
-		interLinkEndpoint = interLinkURL + ":" + interLinkPort
-	default:
-		log.G(ctx).Fatal("InterLinkURL URL should either start per unix:// or http(s)://")
-	}
-	return interLinkEndpoint
-}
-
-// LogRetrieval performs a REST call to the InterLink API when the user ask for a log retrieval. Compared to create/delete/status request, a way smaller struct is marshalled and sent.
-// This struct only includes a minimum data set needed to identify the job/container to get the logs from.
-// Returns the call response and/or the first encountered error
-func LogRetrieval(
-	ctx context.Context,
-	config Config,
-	logsRequest types.LogStruct,
-	clientHTTPTransport *http.Transport,
-	sessionContext string,
-) (io.ReadCloser, error) {
-	tracer := otel.Tracer("interlink-service")
-	interLinkEndpoint := getSidecarEndpoint(ctx, config.InterlinkURL, config.InterlinkPort)
-
-	token := ""
-
-	if config.VKTokenFile != "" {
-		b, err := os.ReadFile(config.VKTokenFile) // just pass the file name
-		if err != nil {
-			log.G(ctx).Fatal(err)
-		}
-		token = string(b)
-	}
-
-	sessionContextMessage := GetSessionContextMessage(sessionContext)
-
-	bodyBytes, err := json.Marshal(logsRequest)
-	if err != nil {
-		errWithContext := fmt.Errorf(sessionContextMessage+"error during marshalling to JSON the log request: %s. Bodybytes: %s error: %w", fmt.Sprintf("%#v", logsRequest), bodyBytes, err)
-		log.G(ctx).Error(errWithContext)
-		return nil, errWithContext
-	}
-
-	reader := bytes.NewReader(bodyBytes)
-	req, err := http.NewRequest(http.MethodGet, interLinkEndpoint+"/getLogs", reader)
-	if err != nil {
-		errWithContext := fmt.Errorf(sessionContextMessage+"error during HTTP request: %s/getLogs %w", interLinkEndpoint, err)
-		log.G(ctx).Error(errWithContext)
-		return nil, errWithContext
-	}
-
-	// log.G(ctx).Println(string(bodyBytes))
-
-	startHTTPCall := time.Now().UnixMicro()
-	_, spanHTTP := tracer.Start(ctx, "LogHttpCall", trace.WithAttributes(
-		attribute.String("pod.name", logsRequest.PodName),
-		attribute.String("pod.namespace", logsRequest.Namespace),
-		attribute.String("pod.uid", logsRequest.PodUID),
-		attribute.Int64("start.timestamp", startHTTPCall),
-	))
-	defer spanHTTP.End()
-	defer types.SetDurationSpan(startHTTPCall, spanHTTP)
-
-	log.G(ctx).Debug(sessionContextMessage, "before doRequestWithClient()")
-	// Add session number for end-to-end from VK to API to InterLink plugin (eg interlink-slurm-plugin)
-	AddSessionContext(req, sessionContext)
-
-	clientHTTPTransport.DisableKeepAlives = true
-	clientHTTPTransport.MaxIdleConnsPerHost = -1
-	logHTTPClient := &http.Client{Transport: clientHTTPTransport}
-
-	resp, err := doRequestWithClient(req, token, logHTTPClient)
-	if err != nil {
-		log.G(ctx).Error(err)
-		return nil, err
-	}
-	// resp.body must not be closed because the kubelet needs to consume it! This is the responsability of the caller to close it.
-	// Called here https://github.com/virtual-kubelet/virtual-kubelet/blob/v1.11.0/node/api/logs.go#L132
-	// defer resp.Body.Close()
-	log.G(ctx).Debug(sessionContextMessage, "after doRequestWithClient()")
-
-	types.SetDurationSpan(startHTTPCall, spanHTTP, types.WithHTTPReturnCode(resp.StatusCode))
-	if resp.StatusCode != http.StatusOK {
-		err = errors.New(sessionContextMessage + "Unexpected error occured while getting logs. Status code: " + strconv.Itoa(resp.StatusCode) + ". Check InterLink's logs for further informations")
-	}
-
-	// return io.NopCloser(bufio.NewReader(resp.Body)), err
-	return resp.Body, err
 }
 
 // Adds to pod environment variables related to services. For now, it only concerns Kubernetes API variables, example below:

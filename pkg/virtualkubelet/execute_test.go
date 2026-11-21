@@ -11,42 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestGetSidecarEndpoint(t *testing.T) {
-	ctx := context.Background()
-	tests := []struct {
-		name          string
-		interlinkURL  string
-		interlinkPort string
-		expected      string
-	}{
-		{
-			name:          "HTTP URL",
-			interlinkURL:  "http://localhost",
-			interlinkPort: "3000",
-			expected:      "http://localhost:3000",
-		},
-		{
-			name:          "HTTPS URL",
-			interlinkURL:  "https://interlink-api.example.com",
-			interlinkPort: "8443",
-			expected:      "https://interlink-api.example.com:8443",
-		},
-		{
-			name:          "Unix socket",
-			interlinkURL:  "unix:///var/run/interlink.sock",
-			interlinkPort: "",
-			expected:      "http://unix",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := getSidecarEndpoint(ctx, tt.interlinkURL, tt.interlinkPort)
-			assert.Equal(t, tt.expected, got)
-		})
-	}
-}
-
 func TestCreateTLSHTTPClient(t *testing.T) {
 	ctx := context.Background()
 
@@ -107,61 +71,6 @@ func TestCreateTLSHTTPClient(t *testing.T) {
 				assert.Equal(t, 120*time.Second, transport.ResponseHeaderTimeout)
 				assert.Equal(t, 120*time.Second, transport.IdleConnTimeout)
 			}
-		})
-	}
-}
-
-func TestDoRequestWithClient(t *testing.T) {
-	testServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify headers
-		assert.Equal(t, "application/json", r.Header.Get("Content-Type"))
-
-		authHeader := r.Header.Get("Authorization")
-		if authHeader != "" {
-			assert.Contains(t, authHeader, "Bearer")
-		}
-
-		w.WriteHeader(http.StatusOK)
-		if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
-			panic(err)
-		}
-	}))
-	defer testServer.Close()
-
-	tests := []struct {
-		name    string
-		token   string
-		wantErr bool
-	}{
-		{
-			name:    "request without token",
-			token:   "",
-			wantErr: false,
-		},
-		{
-			name:    "request with token",
-			token:   "test-token-123",
-			wantErr: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req, err := http.NewRequest(http.MethodGet, testServer.URL, nil)
-			require.NoError(t, err)
-
-			client := testServer.Client()
-			resp, err := doRequestWithClient(req, tt.token, client)
-
-			if tt.wantErr {
-				assert.Error(t, err)
-				return
-			}
-
-			require.NoError(t, err)
-			assert.NotNil(t, resp)
-			assert.Equal(t, http.StatusOK, resp.StatusCode)
-			resp.Body.Close()
 		})
 	}
 }

@@ -133,7 +133,6 @@ type Provider struct {
 	notifier             func(*v1.Pod)
 	onNodeChangeCallback func(*v1.Node)
 	clientSet            *kubernetes.Clientset
-	clientHTTPTransport  *http.Transport
 	interlink            *InterlinkClient
 	podIPs               *podIPTracker
 }
@@ -504,17 +503,16 @@ func NewProviderConfig(
 	}
 
 	provider := Provider{
-		nodeName:            nodeName,
-		node:                &node,
-		operatingSystem:     operatingSystem,
-		internalIP:          internalIP,
-		daemonEndpointPort:  daemonEndpointPort,
-		pods:                newPodStore(),
-		podIPs:              newPodIPTracker(),
-		config:              config,
-		startTime:           time.Now(),
-		clientHTTPTransport: clientHTTPTransport,
-		interlink:           interlinkClient,
+		nodeName:           nodeName,
+		node:               &node,
+		operatingSystem:    operatingSystem,
+		internalIP:         internalIP,
+		daemonEndpointPort: daemonEndpointPort,
+		pods:               newPodStore(),
+		podIPs:             newPodIPTracker(),
+		config:             config,
+		startTime:          time.Now(),
+		interlink:          interlinkClient,
 	}
 
 	return &provider, nil
@@ -2003,8 +2001,7 @@ func (p *Provider) GetLogs(ctx context.Context, namespace, podName, containerNam
 	defer types.SetDurationSpan(start, span)
 
 	// For debugging purpose, when we have many API calls, we can differentiate each one.
-	sessionNumber := mathrand.Intn(100000)
-	sessionContext := "GetLogs#" + strconv.Itoa(sessionNumber)
+	sessionContext := newSessionContext("GetLogs")
 	sessionContextMessage := GetSessionContextMessage(sessionContext)
 
 	log.G(ctx).Infof(sessionContextMessage+"receive GetPodLogs %q", podName)
@@ -2022,7 +2019,7 @@ func (p *Provider) GetLogs(ctx context.Context, namespace, podName, containerNam
 		Opts:          types.ContainerLogOpts(opts),
 	}
 
-	return LogRetrieval(ctx, p.config, logsRequest, p.clientHTTPTransport, sessionContext)
+	return p.interlink.Logs(ctx, logsRequest, sessionContext)
 }
 
 // GetStatsSummary returns dummy stats for all pods known by this provider.

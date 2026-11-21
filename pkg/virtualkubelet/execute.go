@@ -330,121 +330,6 @@ func updateCacheRequest(ctx context.Context, config Config, pod v1.Pod, token st
 	return err
 }
 
-// createRequest performs a REST call to the InterLink API when a Pod is registered to the VK. It Marshals the pod with already retrieved ConfigMaps and Secrets and sends it to InterLink.
-// Returns the call response expressed in bytes and/or the first encountered error
-func createRequest(ctx context.Context, config Config, pod types.PodCreateRequests, token string) ([]byte, error) {
-	tracer := otel.Tracer("interlink-service")
-	interLinkEndpoint := getSidecarEndpoint(ctx, config.InterlinkURL, config.InterlinkPort)
-
-	if config.JobScriptBuilderURL != "" {
-		pod.JobScriptBuilderURL = config.JobScriptBuilderURL
-	}
-
-	bodyBytes, err := json.Marshal(pod)
-	if err != nil {
-		log.L.Error(err)
-		return nil, err
-	}
-	reader := bytes.NewReader(bodyBytes)
-	req, err := http.NewRequest(http.MethodPost, interLinkEndpoint+"/create", reader)
-	if err != nil {
-		log.L.Error(err)
-		return nil, err
-	}
-
-	startHTTPCall := time.Now().UnixMicro()
-	_, spanHTTP := tracer.Start(ctx, "CreateHttpCall", trace.WithAttributes(
-		attribute.String("pod.name", pod.Pod.Name),
-		attribute.String("pod.namespace", pod.Pod.Namespace),
-		attribute.String("pod.uid", string(pod.Pod.UID)),
-		attribute.Int64("start.timestamp", startHTTPCall),
-	))
-	defer spanHTTP.End()
-	defer types.SetDurationSpan(startHTTPCall, spanHTTP)
-
-	// Add session number for end-to-end from VK to API to InterLink plugin (eg interlink-slurm-plugin)
-	AddSessionContext(req, "CreatePod#"+strconv.Itoa(rand.Intn(100000)))
-
-	// Create TLS-enabled HTTP client
-	httpClient, err := createTLSHTTPClient(ctx, config.TLS)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create TLS HTTP client: %w", err)
-	}
-
-	resp, err := doRequestWithClient(req, token, httpClient)
-	if err != nil {
-		return nil, fmt.Errorf("error doing doRequest() in createRequest() log request: %s error: %w", fmt.Sprintf("%#v", req), err)
-	}
-	defer resp.Body.Close()
-
-	types.SetDurationSpan(startHTTPCall, spanHTTP, types.WithHTTPReturnCode(resp.StatusCode))
-
-	returnValue, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("error doing ReadAll() in createRequest() log request: %s error: %w", fmt.Sprintf("%#v", req), err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("error creating pod (HTTP %d): %s", resp.StatusCode, string(returnValue))
-	}
-
-	return returnValue, nil
-}
-
-// deleteRequest performs a REST call to the InterLink API when a Pod is deleted from the VK. It Marshals the standard v1.Pod struct and sends it to InterLink.
-// Returns the call response expressed in bytes and/or the first encountered error
-func deleteRequest(ctx context.Context, config Config, pod *v1.Pod, token string) ([]byte, error) {
-	interLinkEndpoint := getSidecarEndpoint(ctx, config.InterlinkURL, config.InterlinkPort)
-	var returnValue []byte
-	bodyBytes, err := json.Marshal(pod)
-	if err != nil {
-		log.G(context.Background()).Error(err)
-		return nil, err
-	}
-	reader := bytes.NewReader(bodyBytes)
-	req, err := http.NewRequest(http.MethodDelete, interLinkEndpoint+"/delete", reader)
-	if err != nil {
-		log.G(context.Background()).Error(err)
-		return nil, err
-	}
-
-	startHTTPCall := time.Now().UnixMicro()
-	spanHTTP := traceExecute(ctx, pod, "DeleteHttpCall", startHTTPCall)
-
-	// Add session number for end-to-end from VK to API to InterLink plugin (eg interlink-slurm-plugin)
-	AddSessionContext(req, "DeletePod#"+strconv.Itoa(rand.Intn(100000)))
-
-	// Create TLS-enabled HTTP client
-	httpClient, err := createTLSHTTPClient(ctx, config.TLS)
-	if err != nil {
-		log.G(context.Background()).Error("Failed to create TLS HTTP client: ", err)
-		return nil, err
-	}
-
-	resp, err := doRequestWithClient(req, token, httpClient)
-	if err != nil {
-		log.G(context.Background()).Error(err)
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	statusCode := resp.StatusCode
-	types.SetDurationSpan(startHTTPCall, *spanHTTP, types.WithHTTPReturnCode(resp.StatusCode))
-
-	if statusCode != http.StatusOK {
-		return nil, errors.New("Unexpected error occured while deleting Pods. Status code: " + strconv.Itoa(resp.StatusCode) + ". Check InterLink's logs for further informations")
-	}
-
-	returnValue, err = io.ReadAll(resp.Body)
-	if err != nil {
-		log.G(context.Background()).Error(err)
-		return nil, err
-	}
-	log.G(context.Background()).Info(string(returnValue))
-
-	return returnValue, nil
-}
-
 // statusRequest performs a REST call to the InterLink API when the VK needs an update on its Pods' status. A Marshalled slice of v1.Pod is sent to the InterLink API,
 // to query the below plugin for their status.
 // Returns the call response expressed in bytes and/or the first encountered error
@@ -1001,16 +886,6 @@ func resolveEnvRefs(
 // Note: for the CREATE mode, the function gets stuck up to 5 minutes waiting for every missing ConfigMap/Secret.
 // If after 5m they are not still available, the function errors out
 func RemoteExecution(ctx context.Context, config Config, p *Provider, pod *v1.Pod, mode int8) error {
-	token := ""
-	if config.VKTokenFile != "" {
-		b, err := os.ReadFile(config.VKTokenFile) // just pass the file name
-		if err != nil {
-			log.G(ctx).Fatal(err)
-			return err
-		}
-		token = string(b)
-	}
-
 	podToOffload := pod.DeepCopy()
 	podToOffload.Spec.Containers = getOffloadContainers(pod)
 	podToOffload.Spec.InitContainers = getOffloadInitContainers(pod)
@@ -1066,9 +941,9 @@ func RemoteExecution(ctx context.Context, config Config, p *Provider, pod *v1.Po
 			}
 		}
 
-		returnVal, err := createRequest(ctx, config, req, token)
+		returnVal, err := p.interlink.Create(ctx, req)
 		if err != nil {
-			return fmt.Errorf("error doing createRequest() in RemoteExecution() return value %s error detail %s error: %w", returnVal, fmt.Sprintf("%#v", err), err)
+			return fmt.Errorf("error creating pod %s/%s in RemoteExecution(): %w", pod.Namespace, pod.Name, err)
 		}
 
 		log.G(ctx).Debug("Pod ", pod.Name, " with Job ID ", resp.PodJID, " before json.Unmarshal()")
@@ -1095,7 +970,7 @@ func RemoteExecution(ctx context.Context, config Config, p *Provider, pod *v1.Po
 	case DELETE:
 		req := pod
 		if pod.Status.Phase != PodPhaseInitialize {
-			returnVal, err := deleteRequest(ctx, config, req, token)
+			returnVal, err := p.interlink.Delete(ctx, req)
 			if err != nil {
 				return err
 			}

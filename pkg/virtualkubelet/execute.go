@@ -217,10 +217,13 @@ func createTLSHTTPClient(ctx context.Context, tlsConfig TLSConfig) (*http.Client
 		return http.DefaultClient, nil
 	}
 
+	// Same timeouts as the transport created by the virtual kubelet main: without them a stuck interLink API blocks callers forever.
 	transport := &http.Transport{
 		TLSClientConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 		},
+		IdleConnTimeout:       120 * time.Second,
+		ResponseHeaderTimeout: 120 * time.Second,
 	}
 
 	// Load CA certificate if provided

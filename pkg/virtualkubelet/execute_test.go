@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -100,6 +101,11 @@ func TestCreateTLSHTTPClient(t *testing.T) {
 			} else {
 				// Custom client with TLS transport
 				assert.NotEqual(t, http.DefaultClient, client)
+
+				transport, ok := client.Transport.(*http.Transport)
+				require.True(t, ok)
+				assert.Equal(t, 120*time.Second, transport.ResponseHeaderTimeout)
+				assert.Equal(t, 120*time.Second, transport.IdleConnTimeout)
 			}
 		})
 	}

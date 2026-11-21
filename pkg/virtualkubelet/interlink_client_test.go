@@ -15,8 +15,11 @@ import (
 	"testing"
 	"time"
 
+	types "github.com/interlink-hq/interlink/pkg/interlink"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 // newTestInterlinkClient returns a client pointing at srv, bypassing the endpoint validation that rejects loopback hosts.
@@ -26,6 +29,10 @@ func newTestInterlinkClient(srv *httptest.Server) *InterlinkClient {
 		httpClient:    srv.Client(),
 		logHTTPClient: srv.Client(),
 	}
+}
+
+func testPod() *v1.Pod {
+	return &v1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "pod-a", Namespace: "ns-a", UID: "uid-a"}}
 }
 
 func writeTokenFile(t *testing.T, content string) string {
@@ -327,3 +334,196 @@ func TestInterlinkClient_ContextCancellation(t *testing.T) {
 	assert.True(t, errors.Is(err, context.DeadlineExceeded), err)
 	assert.Less(t, time.Since(start), 5*time.Second)
 }
+
+func TestInterlinkClient_Operations(t *testing.T) {
+	tests := []struct {
+		name        string
+		call        func(c *InterlinkClient) error
+		method      string
+		path        string
+		sessionPref string
+		checkBody   func(t *testing.T, body []byte)
+	}{
+		{
+			name: "create",
+			call: func(c *InterlinkClient) error {
+				_, err := c.Create(context.Background(), types.PodCreateRequests{Pod: *testPod()})
+				return err
+			},
+			method:      http.MethodPost,
+			path:        "/create",
+			sessionPref: "CreatePod#",
+			checkBody: func(t *testing.T, body []byte) {
+				var got types.PodCreateRequests
+				require.NoError(t, json.Unmarshal(body, &got))
+				assert.Equal(t, "pod-a", got.Pod.Name)
+				assert.Equal(t, "http://builder.example.com", got.JobScriptBuilderURL)
+			},
+		},
+		{
+			name: "delete",
+			call: func(c *InterlinkClient) error {
+				_, err := c.Delete(context.Background(), testPod())
+				return err
+			},
+			method:      http.MethodDelete,
+			path:        "/delete",
+			sessionPref: "DeletePod#",
+			checkBody: func(t *testing.T, body []byte) {
+				var got v1.Pod
+				require.NoError(t, json.Unmarshal(body, &got))
+				assert.Equal(t, "pod-a", got.Name)
+			},
+		},
+		{
+			name: "status",
+			call: func(c *InterlinkClient) error {
+				_, err := c.Status(context.Background(), []*v1.Pod{testPod()})
+				return err
+			},
+			method:      http.MethodGet,
+			path:        "/status",
+			sessionPref: "GetStatus#",
+			checkBody: func(t *testing.T, body []byte) {
+				var got []v1.Pod
+				require.NoError(t, json.Unmarshal(body, &got))
+				require.Len(t, got, 1)
+				assert.Equal(t, "pod-a", got[0].Name)
+			},
+		},
+		{
+			name: "update cache",
+			call: func(c *InterlinkClient) error {
+				return c.UpdateCache(context.Background(), testPod())
+			},
+			method:      http.MethodPost,
+			path:        "/updateCache",
+			sessionPref: "UpdateCache#",
+			checkBody: func(t *testing.T, body []byte) {
+				var got v1.Pod
+				require.NoError(t, json.Unmarshal(body, &got))
+				assert.Equal(t, "uid-a", string(got.UID))
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var called atomic.Bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				called.Store(true)
+				assert.Equal(t, tt.method, r.Method)
+				assert.Equal(t, tt.path, r.URL.Path)
+				assert.Equal(t, "Bearer secret-token", r.Header.Get("Authorization"))
+				assert.True(t, strings.HasPrefix(r.Header.Get("InterLink-Http-Session"), tt.sessionPref), r.Header.Get("InterLink-Http-Session"))
+
+				body, err := io.ReadAll(r.Body)
+				assert.NoError(t, err)
+				tt.checkBody(t, body)
+
+				writeBody(t, w, "ok")
+			}))
+			defer srv.Close()
+
+			client := newTestInterlinkClient(srv)
+			client.tokenFile = writeTokenFile(t, "secret-token\n")
+			client.jobScriptBuilderURL = "http://builder.example.com"
+
+			require.NoError(t, tt.call(client))
+			assert.True(t, called.Load())
+		})
+	}
+}
+
+func TestInterlinkClient_OperationsReturnResponseBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeBody(t, w, `{"PodUID":"uid-a","PodJID":"42"}`)
+	}))
+	defer srv.Close()
+
+	body, err := newTestInterlinkClient(srv).Create(context.Background(), types.PodCreateRequests{Pod: *testPod()})
+	require.NoError(t, err)
+	assert.JSONEq(t, `{"PodUID":"uid-a","PodJID":"42"}`, string(body))
+}
+
+func TestInterlinkClient_OperationsReportStatusErrors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		writeBody(t, w, "plugin exploded")
+	}))
+	defer srv.Close()
+	client := newTestInterlinkClient(srv)
+
+	_, err := client.Delete(context.Background(), testPod())
+
+	var statusErr *InterlinkStatusError
+	require.True(t, errors.As(err, &statusErr))
+	assert.Equal(t, "delete", statusErr.Op)
+	assert.Equal(t, http.StatusInternalServerError, statusErr.StatusCode)
+
+	assert.Error(t, client.UpdateCache(context.Background(), testPod()))
+}
+
+func TestInterlinkClient_Logs(t *testing.T) {
+	logsRequest := types.LogStruct{PodName: "pod-a", Namespace: "ns-a", PodUID: "uid-a", ContainerName: "main"}
+
+	t.Run("returns the body unread for the caller to consume", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			assert.Equal(t, http.MethodGet, r.Method)
+			assert.Equal(t, "/getLogs", r.URL.Path)
+			assert.Equal(t, "GetLogs#7", r.Header.Get("InterLink-Http-Session"))
+
+			var got types.LogStruct
+			assert.NoError(t, json.NewDecoder(r.Body).Decode(&got))
+			assert.Equal(t, "main", got.ContainerName)
+
+			writeBody(t, w, "line 1\nline 2\n")
+		}))
+		defer srv.Close()
+
+		rc, err := newTestInterlinkClient(srv).Logs(context.Background(), logsRequest, "GetLogs#7")
+		require.NoError(t, err)
+		defer rc.Close()
+
+		data, err := io.ReadAll(rc)
+		require.NoError(t, err)
+		assert.Equal(t, "line 1\nline 2\n", string(data))
+	})
+
+	t.Run("non-200 returns a typed error and no body", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			writeBody(t, w, "no such job")
+		}))
+		defer srv.Close()
+
+		rc, err := newTestInterlinkClient(srv).Logs(context.Background(), logsRequest, "GetLogs#7")
+		assert.Nil(t, rc)
+
+		var statusErr *InterlinkStatusError
+		require.True(t, errors.As(err, &statusErr))
+		assert.Equal(t, http.StatusNotFound, statusErr.StatusCode)
+		assert.Equal(t, "no such job", statusErr.Body)
+	})
+
+	t.Run("uses the dedicated log client", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		defer srv.Close()
+
+		var used atomic.Bool
+		client := newTestInterlinkClient(srv)
+		client.logHTTPClient = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+			used.Store(true)
+			return srv.Client().Transport.RoundTrip(r)
+		})}
+
+		rc, err := client.Logs(context.Background(), logsRequest, "GetLogs#7")
+		require.NoError(t, err)
+		rc.Close()
+		assert.True(t, used.Load())
+	})
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

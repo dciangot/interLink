@@ -20,7 +20,12 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	trace "go.opentelemetry.io/otel/trace"
+	v1 "k8s.io/api/core/v1"
 )
+
+// maxErrorBodyBytes bounds how much of an error response is kept when the interLink API answers with a non-200 status
+// while the body is otherwise streamed (log retrieval).
+const maxErrorBodyBytes = 4096
 
 // InterlinkStatusError is returned when the interLink API answers with a status code other than 200.
 type InterlinkStatusError struct {
@@ -120,6 +125,14 @@ type interlinkCall struct {
 	// attrs are extra tracing attributes, e.g. the pod the call is about.
 	attrs      []attribute.KeyValue
 	httpClient *http.Client
+}
+
+func podAttributes(name, namespace, uid string) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		attribute.String("pod.name", name),
+		attribute.String("pod.namespace", namespace),
+		attribute.String("pod.uid", uid),
+	}
 }
 
 func (c *InterlinkClient) readToken() (string, error) {
@@ -228,4 +241,95 @@ func (c *InterlinkClient) Ping(ctx context.Context) (int, string, error) {
 	}
 
 	return http.StatusOK, string(body), nil
+}
+
+// Create asks interLink to create a pod. The pod is sent already enriched with the ConfigMaps and Secrets it needs.
+// Returns the response body.
+func (c *InterlinkClient) Create(ctx context.Context, pod types.PodCreateRequests) ([]byte, error) {
+	if c.jobScriptBuilderURL != "" {
+		pod.JobScriptBuilderURL = c.jobScriptBuilderURL
+	}
+
+	return c.doJSON(ctx, interlinkCall{
+		op:       "create",
+		spanName: "CreateHttpCall",
+		method:   http.MethodPost,
+		path:     "/create",
+		body:     pod,
+		session:  newSessionContext("CreatePod"),
+		attrs:    podAttributes(pod.Pod.Name, pod.Pod.Namespace, string(pod.Pod.UID)),
+	})
+}
+
+// Delete asks interLink to delete a pod. Returns the response body.
+func (c *InterlinkClient) Delete(ctx context.Context, pod *v1.Pod) ([]byte, error) {
+	return c.doJSON(ctx, interlinkCall{
+		op:       "delete",
+		spanName: "DeleteHttpCall",
+		method:   http.MethodDelete,
+		path:     "/delete",
+		body:     pod,
+		session:  newSessionContext("DeletePod"),
+		attrs:    podAttributes(pod.Name, pod.Namespace, string(pod.UID)),
+	})
+}
+
+// Status asks interLink, and the plugin behind it, for the status of the given pods. Returns the response body.
+func (c *InterlinkClient) Status(ctx context.Context, pods []*v1.Pod) ([]byte, error) {
+	return c.doJSON(ctx, interlinkCall{
+		op:       "status",
+		spanName: "StatusHttpCall",
+		method:   http.MethodGet,
+		path:     "/status",
+		body:     pods,
+		session:  newSessionContext("GetStatus"),
+	})
+}
+
+// UpdateCache is called when the VK receives the status of a pod that was already deleted: interLink drops that pod from
+// its cache.
+func (c *InterlinkClient) UpdateCache(ctx context.Context, pod *v1.Pod) error {
+	_, err := c.doJSON(ctx, interlinkCall{
+		op:       "cache update",
+		spanName: "UpdateCacheHttpCall",
+		method:   http.MethodPost,
+		path:     "/updateCache",
+		body:     pod,
+		session:  newSessionContext("UpdateCache"),
+		attrs:    podAttributes(pod.Name, pod.Namespace, string(pod.UID)),
+	})
+	return err
+}
+
+// Logs asks interLink for the logs of a container. Only the minimum data set needed to identify the job and container
+// is sent.
+//
+// On success the response body is returned unread and it is the responsibility of the caller to close it: the kubelet
+// consumes it (see https://github.com/virtual-kubelet/virtual-kubelet/blob/v1.11.0/node/api/logs.go#L132).
+func (c *InterlinkClient) Logs(ctx context.Context, logsRequest types.LogStruct, sessionContext string) (io.ReadCloser, error) {
+	resp, err := c.roundTrip(ctx, interlinkCall{
+		op:         "log retrieval",
+		spanName:   "LogHttpCall",
+		method:     http.MethodGet,
+		path:       "/getLogs",
+		body:       logsRequest,
+		session:    sessionContext,
+		attrs:      podAttributes(logsRequest.PodName, logsRequest.Namespace, logsRequest.PodUID),
+		httpClient: c.logHTTPClient,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
+		if readErr != nil {
+			// The body only explains the failure: report the status code anyway.
+			log.G(ctx).Warning("failed to read the log retrieval error body: ", readErr)
+		}
+		return nil, fmt.Errorf("%s%w", GetSessionContextMessage(sessionContext), &InterlinkStatusError{Op: "log retrieval", StatusCode: resp.StatusCode, Body: string(body)})
+	}
+
+	return resp.Body, nil
 }

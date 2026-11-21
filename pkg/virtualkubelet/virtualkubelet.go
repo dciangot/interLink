@@ -1953,27 +1953,18 @@ func (p *Provider) statusLoop(ctx context.Context) {
 			p.podIPs.replace(usedIPs)
 		}
 
-		token := ""
-		if p.config.VKTokenFile != "" {
-			b, err := os.ReadFile(p.config.VKTokenFile) // just pass the file name
-			if err != nil {
-				fmt.Print(err)
-			}
-			token = string(b)
-		}
-
 		for _, pod := range p.pods.list() {
 			if pod.Status.Phase != "Initializing" {
 				if pod.Status.Phase == v1.PodFailed || pod.Status.Phase == v1.PodSucceeded {
 					if stored, ok := p.pods.get(string(pod.UID)); ok && stored.Status.Phase != pod.Status.Phase {
-						_, err := checkPodsStatus(ctx, p, pod, token, p.config)
+						_, err := checkPodsStatus(ctx, p, pod)
 						if err != nil {
 							log.G(ctx).Error(err)
 						}
 						p.asyncUpdate(ctx, pod)
 					}
 				} else {
-					_, err := checkPodsStatus(ctx, p, pod, token, p.config)
+					_, err := checkPodsStatus(ctx, p, pod)
 					if err != nil {
 						log.G(ctx).Error(err)
 					}

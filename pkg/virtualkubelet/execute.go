@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math/rand"
 	"net/http"
 	"net/url"
 	"os"
@@ -197,20 +196,6 @@ func failedMount(ctx context.Context, failedAndWait *bool, name string, pod *v1.
 	return nil
 }
 
-func traceExecute(ctx context.Context, pod *v1.Pod, name string, startHTTPCall int64) *trace.Span {
-	tracer := otel.Tracer("interlink-service")
-	_, spanHTTP := tracer.Start(ctx, name, trace.WithAttributes(
-		attribute.String("pod.name", pod.Name),
-		attribute.String("pod.namespace", pod.Namespace),
-		attribute.String("pod.uid", string(pod.UID)),
-		attribute.Int64("start.timestamp", startHTTPCall),
-	))
-	defer spanHTTP.End()
-	defer types.SetDurationSpan(startHTTPCall, spanHTTP)
-
-	return &spanHTTP
-}
-
 // createTLSHTTPClient creates an HTTP client with TLS/mTLS configuration
 func createTLSHTTPClient(ctx context.Context, tlsConfig TLSConfig) (*http.Client, error) {
 	if !tlsConfig.Enabled {
@@ -279,117 +264,6 @@ func getSidecarEndpoint(ctx context.Context, interLinkURL string, interLinkPort 
 		log.G(ctx).Fatal("InterLinkURL URL should either start per unix:// or http(s)://")
 	}
 	return interLinkEndpoint
-}
-
-// updateCacheRequest is called when the VK receives the status of a pod already deleted. It performs a REST call InterLink API to update the cache deleting that pod from the cached structure
-func updateCacheRequest(ctx context.Context, config Config, pod v1.Pod, token string) error {
-	bodyBytes, err := json.Marshal(pod)
-	if err != nil {
-		log.L.Error(err)
-		return err
-	}
-
-	interLinkEndpoint := getSidecarEndpoint(ctx, config.InterlinkURL, config.InterlinkPort)
-	reader := bytes.NewReader(bodyBytes)
-	req, err := http.NewRequest(http.MethodPost, interLinkEndpoint+"/updateCache", reader)
-	if err != nil {
-		log.L.Error(err)
-		return err
-	}
-
-	if token != "" {
-		req.Header.Add("Authorization", "Bearer "+token)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	startHTTPCall := time.Now().UnixMicro()
-	spanHTTP := traceExecute(ctx, &pod, "UpdateCacheHttpCall", startHTTPCall)
-
-	// Add session number for end-to-end from VK to API to InterLink plugin (eg interlink-slurm-plugin)
-	AddSessionContext(req, "UpdateCache#"+strconv.Itoa(rand.Intn(100000)))
-
-	// Create TLS-enabled HTTP client
-	httpClient, err := createTLSHTTPClient(ctx, config.TLS)
-	if err != nil {
-		log.L.Error("Failed to create TLS HTTP client: ", err)
-		return err
-	}
-
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		log.L.Error(err)
-		return err
-	}
-	defer resp.Body.Close()
-
-	types.SetDurationSpan(startHTTPCall, *spanHTTP, types.WithHTTPReturnCode(resp.StatusCode))
-	if resp.StatusCode != http.StatusOK {
-		return errors.New("Unexpected error occured while updating InterLink cache. Status code: " + strconv.Itoa(resp.StatusCode) + ". Check InterLink's logs for further informations")
-	}
-
-	return err
-}
-
-// statusRequest performs a REST call to the InterLink API when the VK needs an update on its Pods' status. A Marshalled slice of v1.Pod is sent to the InterLink API,
-// to query the below plugin for their status.
-// Returns the call response expressed in bytes and/or the first encountered error
-func statusRequest(ctx context.Context, config Config, podsList []*v1.Pod, token string) ([]byte, error) {
-	tracer := otel.Tracer("interlink-service")
-
-	interLinkEndpoint := getSidecarEndpoint(ctx, config.InterlinkURL, config.InterlinkPort)
-
-	bodyBytes, err := json.Marshal(podsList)
-	if err != nil {
-		log.L.Error(err)
-		return nil, err
-	}
-	reader := bytes.NewReader(bodyBytes)
-	req, err := http.NewRequest(http.MethodGet, interLinkEndpoint+"/status", reader)
-	if err != nil {
-		log.L.Error(err)
-		return nil, err
-	}
-
-	//  log.L.Println(string(bodyBytes))
-
-	startHTTPCall := time.Now().UnixMicro()
-	_, spanHTTP := tracer.Start(ctx, "StatusHttpCall", trace.WithAttributes(
-		attribute.Int64("start.timestamp", startHTTPCall),
-	))
-	defer spanHTTP.End()
-	defer types.SetDurationSpan(startHTTPCall, spanHTTP)
-
-	// Add session number for end-to-end from VK to API to InterLink plugin (eg interlink-slurm-plugin)
-	AddSessionContext(req, "GetStatus#"+strconv.Itoa(rand.Intn(100000)))
-
-	// Create TLS-enabled HTTP client
-	httpClient, err := createTLSHTTPClient(ctx, config.TLS)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create TLS HTTP client: %w", err)
-	}
-
-	resp, err := doRequestWithClient(req, token, httpClient)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	types.SetDurationSpan(startHTTPCall, spanHTTP, types.WithHTTPReturnCode(resp.StatusCode))
-	if resp.StatusCode != http.StatusOK {
-		returnValue, err := io.ReadAll(resp.Body)
-		if err != nil {
-			log.L.Error(err)
-			return nil, err
-		}
-		return nil, errors.New("Unexpected error occured while getting status. Status code: " + strconv.Itoa(resp.StatusCode) + ". Check InterLink's logs for further informations\n" + string(returnValue))
-	}
-	returnValue, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.L.Error(err)
-		return nil, err
-	}
-
-	return returnValue, nil
 }
 
 // LogRetrieval performs a REST call to the InterLink API when the user ask for a log retrieval. Compared to create/delete/status request, a way smaller struct is marshalled and sent.
@@ -1101,13 +975,13 @@ func handleContainersUpdate(ctx context.Context, podRemoteStatus types.PodStatus
 }
 
 // checkPodsStatus is regularly called by the VK itself at regular intervals of time to query InterLink for Pods' status.
-// It basically append all available pods registered to the VK to a slice and passes this slice to the statusRequest function.
-// After the statusRequest returns a response, this function uses that response to update every Pod and Container status.
-func checkPodsStatus(ctx context.Context, p *Provider, pod *v1.Pod, token string, config Config) ([]types.PodStatus, error) {
+// It basically append all available pods registered to the VK to a slice and passes this slice to the interLink client.
+// After the status call returns a response, this function uses that response to update every Pod and Container status.
+func checkPodsStatus(ctx context.Context, p *Provider, pod *v1.Pod) ([]types.PodStatus, error) {
 	var ret []types.PodStatus
 
 	// retrieve pod status from remote interlink
-	returnVal, err := statusRequest(ctx, config, []*v1.Pod{pod}, token)
+	returnVal, err := p.interlink.Status(ctx, []*v1.Pod{pod})
 	if err != nil {
 		return nil, err
 	}
@@ -1241,7 +1115,7 @@ func checkPodsStatus(ctx context.Context, p *Provider, pod *v1.Pod, token string
 
 			for _, pod := range pods {
 				if string(pod.UID) == podRemoteStatus.PodUID {
-					err = updateCacheRequest(ctx, config, pod, token)
+					err = p.interlink.UpdateCache(ctx, &pod)
 					if err != nil {
 						log.G(ctx).Error(err)
 						continue

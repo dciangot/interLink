@@ -127,14 +127,14 @@ type Provider struct {
 	operatingSystem      string
 	internalIP           string
 	daemonEndpointPort   int32
-	pods                 map[string]*v1.Pod
+	pods                 *podStore
 	config               Config
 	startTime            time.Time
 	notifier             func(*v1.Pod)
 	onNodeChangeCallback func(*v1.Node)
 	clientSet            *kubernetes.Clientset
 	clientHTTPTransport  *http.Transport
-	podIPs               []string
+	podIPs               *podIPTracker
 }
 
 // Increment the given IP address
@@ -202,7 +202,7 @@ func TracerUpdate(ctx *context.Context, name string, pod *v1.Pod) {
 	defer types.SetDurationSpan(start, span)
 }
 
-func PodPhase(_ Provider, phase string, podIP string) (v1.PodStatus, error) {
+func PodPhase(_ *Provider, phase string, podIP string) (v1.PodStatus, error) {
 	now := metav1.NewTime(time.Now())
 
 	var podPhase v1.PodPhase
@@ -503,7 +503,8 @@ func NewProviderConfig(
 		operatingSystem:     operatingSystem,
 		internalIP:          internalIP,
 		daemonEndpointPort:  daemonEndpointPort,
-		pods:                make(map[string]*v1.Pod),
+		pods:                newPodStore(),
+		podIPs:              newPodIPTracker(),
 		config:              config,
 		startTime:           time.Now(),
 		clientHTTPTransport: clientHTTPTransport,
@@ -1582,7 +1583,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *v1.Pod) error {
 
 		for _, podVPN := range podsVPN.Items {
 			if ip, ok := podVPN.Annotations["interlink.eu/pod-ip"]; ok {
-				p.podIPs = append(p.podIPs, ip)
+				p.podIPs.add(ip)
 			}
 		}
 
@@ -1618,14 +1619,15 @@ func (p *Provider) CreatePod(ctx context.Context, pod *v1.Pod) error {
 			maxIP = 250
 		}
 
-		freeIP := findFirstFreeIP(ipList, p.podIPs, minIP, maxIP)
+		freeIP := p.podIPs.allocate(func(used []string) string {
+			return findFirstFreeIP(ipList, used, minIP, maxIP)
+		})
 		if freeIP != "" {
 			log.G(ctx).Info("First free IP: ", freeIP)
 		} else {
 			return fmt.Errorf("no free IP found")
 		}
 
-		p.podIPs = append(p.podIPs, freeIP)
 		pod.Annotations["interlink.eu/pod-ip"] = freeIP
 		podIP = freeIP
 	} else if ip, ok := pod.Annotations["interlink.eu/pod-ip"]; ok {
@@ -1635,7 +1637,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *v1.Pod) error {
 	// in case we have initContainers we need to stop main containers from executing for now ...
 	if len(pod.Spec.InitContainers) > 0 {
 		// Pods with init containers should be Pending until init containers complete
-		status, err := PodPhase(*p, "Pending", podIP)
+		status, err := PodPhase(p, "Pending", podIP)
 		if err != nil {
 			log.G(ctx).Error(err)
 			return err
@@ -1655,7 +1657,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *v1.Pod) error {
 	} else {
 
 		// if no init containers are there, go head and set phase to initialized
-		status, err := PodPhase(*p, "Pending", podIP)
+		status, err := PodPhase(p, "Pending", podIP)
 		if err != nil {
 			log.G(ctx).Error(err)
 			return err
@@ -1681,7 +1683,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *v1.Pod) error {
 				creationError := err.Error()
 
 				// Set pod to Failed state
-				pod.Status, err = PodPhase(*p, "Failed", podIP)
+				pod.Status, err = PodPhase(p, "Failed", podIP)
 				if err != nil {
 					log.G(ctx).Error(err)
 					return
@@ -1746,7 +1748,7 @@ func (p *Provider) CreatePod(ctx context.Context, pod *v1.Pod) error {
 		})
 	}
 
-	p.pods[string(key)] = pod
+	p.pods.set(string(key), pod)
 
 	return nil
 }
@@ -1768,7 +1770,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *v1.Pod) (err error) {
 
 	key := pod.UID
 
-	if _, exists := p.pods[string(key)]; !exists {
+	if _, exists := p.pods.get(string(key)); !exists {
 		return errdefs.NotFound("pod not found")
 	}
 
@@ -1830,7 +1832,7 @@ func (p *Provider) DeletePod(ctx context.Context, pod *v1.Pod) (err error) {
 	}
 
 	// delete from p.pods
-	delete(p.pods, string(key))
+	p.pods.delete(string(key))
 
 	return nil
 }
@@ -1857,7 +1859,7 @@ func (p *Provider) GetPodByUID(ctx context.Context, namespace, name string, uid 
 
 	log.G(ctx).Infof("receive GetPod %q", name)
 
-	if pod, ok := p.pods[string(uid)]; ok {
+	if pod, ok := p.pods.get(string(uid)); ok {
 		return pod, nil
 	}
 
@@ -1900,9 +1902,7 @@ func (p *Provider) GetPods(ctx context.Context) ([]*v1.Pod, error) {
 
 	var pods []*v1.Pod
 
-	for _, pod := range p.pods {
-		pods = append(pods, pod)
-	}
+	pods = append(pods, p.pods.list()...)
 
 	go p.statusLoop(ctx)
 	return pods, nil
@@ -1929,19 +1929,21 @@ func (p *Provider) statusLoop(ctx context.Context) {
 		case <-t.C:
 		}
 
-		p.podIPs = []string{}
-
+		// Rebuild the set of used IPs from the cluster. On a listing error keep the previous
+		// set, otherwise in-use addresses would be reported as free.
 		podsVPN, err := p.clientSet.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
 		if err != nil {
 			log.G(ctx).Error(err)
-		}
+		} else {
+			log.G(ctx).Debug("Pod lists with pod-vpn enabled has len ", len(podsVPN.Items))
 
-		log.G(ctx).Debug("Pod lists with pod-vpn enabled has len ", len(podsVPN.Items))
-
-		for _, podVPN := range podsVPN.Items {
-			if ip, ok := podVPN.Annotations["interlink.eu/pod-ip"]; ok {
-				p.podIPs = append(p.podIPs, ip)
+			usedIPs := []string{}
+			for _, podVPN := range podsVPN.Items {
+				if ip, ok := podVPN.Annotations["interlink.eu/pod-ip"]; ok {
+					usedIPs = append(usedIPs, ip)
+				}
 			}
+			p.podIPs.replace(usedIPs)
 		}
 
 		token := ""
@@ -1953,10 +1955,10 @@ func (p *Provider) statusLoop(ctx context.Context) {
 			token = string(b)
 		}
 
-		for _, pod := range p.pods {
+		for _, pod := range p.pods.list() {
 			if pod.Status.Phase != "Initializing" {
 				if pod.Status.Phase == v1.PodFailed || pod.Status.Phase == v1.PodSucceeded {
-					if p.pods[string(pod.UID)].Status.Phase != pod.Status.Phase {
+					if stored, ok := p.pods.get(string(pod.UID)); ok && stored.Status.Phase != pod.Status.Phase {
 						_, err := checkPodsStatus(ctx, p, pod, token, p.config)
 						if err != nil {
 							log.G(ctx).Error(err)
@@ -2048,7 +2050,7 @@ func (p *Provider) GetStatsSummary(ctx context.Context) (*stats.Summary, error) 
 	}
 
 	// Populate the Summary object with dummy stats for each pod known by this provider.
-	for _, pod := range p.pods {
+	for _, pod := range p.pods.list() {
 		var (
 			// totalUsageNanoCores will be populated with the sum of the values of UsageNanoCores computes across all containers in the pod.
 			totalUsageNanoCores uint64
@@ -2133,7 +2135,7 @@ func (p *Provider) RetrievePodsFromCluster(ctx context.Context) error {
 		}
 		for _, pod := range podsList.Items {
 			if CheckIfAnnotationExists(&pod, "JobID") && p.nodeName == pod.Spec.NodeName {
-				p.pods[string(pod.UID)] = &pod
+				p.pods.set(string(pod.UID), &pod)
 				p.notifier(&pod)
 			}
 		}
